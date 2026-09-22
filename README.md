@@ -70,6 +70,10 @@ uvicorn app.main:app --reload --no-access-log
 
 Never commit `.env`, `.venv/`, or `secrets/`.
 
+```bash
+pytest
+```
+
 The connection pool sets PostgreSQL `TimeZone` to **UTC** for this app only.
 
 ---
