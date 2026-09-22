@@ -24,7 +24,7 @@ Subscriptions expire after **60 days** and are deleted automatically.
 
 The infection name (gonorrhoea, syphilis, HIV, Mpox, HPV, …) is chosen in the **app** at notify time. The card is not tied to an STI. The phone should encrypt that choice; the lock-screen text is always generic: *Someone you connected with may have an STI.*
 
-**Known gap:** `/notify` currently takes one `encrypted_payload` for the whole campaign. Each card has its own token, so ciphertext should be **per contact**. That will be fixed before the app is wired up.
+Each card has its own token, so the app encrypts the STI type **once per contact** (key derived from that card). The server only forwards those bytes.
 
 ---
 
@@ -112,10 +112,13 @@ All hashes are **64 lowercase hex characters** (SHA-256).
   "sender_push_id_hash": "<sha256 hex>",
   "device_credential": "<64 hex>",
   "campaign_id": "<uuid>",
-  "encrypted_payload": "<opaque ciphertext>",
   "deliveries": [
-    { "et_hash": "<sha256 hex>" },
-    { "et_hash": "<sha256 hex>", "scheduled_at": "2026-10-01T12:00:00+00:00" }
+    { "et_hash": "<sha256 hex>", "encrypted_payload": "<ciphertext for this card>" },
+    {
+      "et_hash": "<sha256 hex>",
+      "encrypted_payload": "<ciphertext for this card>",
+      "scheduled_at": "2026-10-01T12:00:00+00:00"
+    }
   ]
 }
 ```

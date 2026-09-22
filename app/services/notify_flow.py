@@ -2,12 +2,11 @@
 #
 # Shared notify / schedule logic.
 #
-# encrypted_payload is produced on the phone:
-#   key = SHA-256(raw encounter token)  — both card halves share that token
+# Each delivery carries its own encrypted_payload, produced on the phone:
+#   key = derived from THAT card's raw token (both halves share it)
 #   payload = encrypt(STI type) with that key
-# The server never has the raw token, so it cannot read the STI type.
-# Apple/Google only see the ciphertext in a custom data field, not in the
-# lock-screen alert. We do not write plaintext STI type to the database.
+# Different cards have different tokens, so ciphertext cannot be reused
+# across deliveries. The server never has the raw token and never decrypts.
 
 from datetime import datetime, timezone, timedelta
 
@@ -40,7 +39,6 @@ async def run_deliveries(
     device_credential: str,
     sender_push_id_hash: str,
     campaign_id,
-    encrypted_payload: str,
     deliveries: list,
 ) -> dict:
     await verify_device(conn, sender_push_id_hash, device_credential)
@@ -95,7 +93,7 @@ async def run_deliveries(
                 """,
                 item.et_hash,
                 sender_push_id_hash,
-                encrypted_payload,
+                item.encrypted_payload,
                 scheduled_at,
             )
             scheduled += 1
@@ -121,7 +119,7 @@ async def run_deliveries(
             recorded = True
         await send_push_to_all(
             recipients=[dict(r) for r in recipients],
-            encrypted_payload=encrypted_payload,
+            encrypted_payload=item.encrypted_payload,
         )
         pushed += len(recipients)
         succeeded.append(item.et_hash)

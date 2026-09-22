@@ -53,6 +53,14 @@ class SubscribeRequest(BaseModel):
 
 class Delivery(BaseModel):
     et_hash: str
+    encrypted_payload: str = Field(
+        description=(
+            "STI type encrypted on the phone with a key derived from THIS card's "
+            "raw token. Each contact needs its own ciphertext. Server never decrypts."
+        ),
+        min_length=1,
+        max_length=MAX_ENCRYPTED_PAYLOAD,
+    )
     scheduled_at: datetime | None = Field(
         default=None,
         description="UTC time to send. Omit for immediate delivery.",
@@ -69,11 +77,6 @@ class NotifyRequest(BaseModel):
     sender_push_id_hash: str
     device_credential: str
     campaign_id: UUID
-    encrypted_payload: str = Field(
-        description="Client-encrypted STI type. Server stores/forwards bytes only; never plaintext.",
-        min_length=1,
-        max_length=MAX_ENCRYPTED_PAYLOAD,
-    )
     deliveries: list[Delivery] = Field(min_length=1, max_length=100)
 
     @field_validator("sender_push_id_hash")

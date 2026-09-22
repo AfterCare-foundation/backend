@@ -19,6 +19,11 @@ async def schedule(body: ScheduleRequest, conn: asyncpg.Connection = Depends(get
         device_credential=body.device_credential,
         sender_push_id_hash=body.sender_push_id_hash,
         campaign_id=body.campaign_id,
-        encrypted_payload=body.encrypted_payload,
-        deliveries=[Delivery(et_hash=body.et_hash, scheduled_at=body.scheduled_at)],
+        deliveries=[
+            Delivery(
+                et_hash=body.et_hash,
+                encrypted_payload=body.encrypted_payload,
+                scheduled_at=body.scheduled_at,
+            )
+        ],
     )
