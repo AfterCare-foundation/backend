@@ -24,7 +24,7 @@ Subscriptions expire after **60 days** and are deleted automatically.
 
 The infection name (gonorrhoea, syphilis, HIV, Mpox, HPV, …) is chosen in the **app** at notify time. The card is not tied to an STI. The phone should encrypt that choice; the lock-screen text is always generic: *Someone you connected with may have an STI.*
 
-Each card has its own token, so the app encrypts the STI type **once per contact** (key derived from that card). The server only forwards those bytes.
+Each card has its own token, so the app encrypts the STI type **once per contact**. Hashing and AES-GCM details: [docs/CRYPTO.md](docs/CRYPTO.md).
 
 ---
 
