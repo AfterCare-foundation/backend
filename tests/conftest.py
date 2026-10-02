@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import dev_inbox
 
 PGPASSWORD = "aftercare_dev_password"
 
@@ -42,8 +43,10 @@ def wipe_db():
 @pytest.fixture
 def client():
     wipe_db()
+    dev_inbox.clear()
     with TestClient(app) as test_client:
         yield test_client
+    dev_inbox.clear()
     wipe_db()
 
 
@@ -86,3 +89,13 @@ def notify(client, *, device: str, card: str, campaign_id: str | None = None, sc
         "deliveries": [delivery],
     }
     return client.post("/notify", json=body), body
+
+
+def pull_inbox(client, *, device: str):
+    return client.post(
+        "/dev/inbox",
+        json={
+            "push_id_hash": sha256_hex(f"push:{device}"),
+            "device_credential": sha256_hex(f"secret:{device}"),
+        },
+    )

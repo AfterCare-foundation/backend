@@ -16,6 +16,7 @@ import time
 import httpx
 
 from app.config import settings
+from app.services import dev_inbox
 
 logger = logging.getLogger(__name__)
 
@@ -109,9 +110,16 @@ async def _send_fcm(push_token: str, encrypted_payload: str) -> None:
         logger.error("FCM push failed: status=%s", response.status_code)
 
 
-async def send_push(push_token: str, platform: str, encrypted_payload: str) -> None:
+async def send_push(
+    push_token: str,
+    platform: str,
+    encrypted_payload: str,
+    push_id_hash: str,
+) -> None:
     if settings.push_stub_mode:
         logger.info("[PUSH STUB] would send to %s device", platform)
+        if settings.environment == "development":
+            dev_inbox.append(push_id_hash, encrypted_payload, PUSH_ALERT_BODY)
         return
 
     if platform == "ios":
@@ -124,4 +132,9 @@ async def send_push(push_token: str, platform: str, encrypted_payload: str) -> N
 
 async def send_push_to_all(recipients: list[dict], encrypted_payload: str) -> None:
     for recipient in recipients:
-        await send_push(recipient["push_token"], recipient["platform"], encrypted_payload)
+        await send_push(
+            recipient["push_token"],
+            recipient["platform"],
+            encrypted_payload,
+            recipient["push_id_hash"],
+        )

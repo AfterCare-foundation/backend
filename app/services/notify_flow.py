@@ -103,7 +103,7 @@ async def run_deliveries(
 
         recipients = await conn.fetch(
             """
-            SELECT push_token, platform
+            SELECT push_id_hash, push_token, platform
             FROM token_subscriptions
             WHERE et_hash = $1
               AND push_id_hash != $2

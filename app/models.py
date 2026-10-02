@@ -109,6 +109,22 @@ class ScheduleRequest(BaseModel):
         return require_credential(v)
 
 
+class DevInboxRequest(BaseModel):
+    """Pull stub pushes for this device. Development only."""
+    push_id_hash: str
+    device_credential: str
+
+    @field_validator("push_id_hash")
+    @classmethod
+    def validate_hash(cls, v: str) -> str:
+        return require_hash(v)
+
+    @field_validator("device_credential")
+    @classmethod
+    def validate_credential(cls, v: str) -> str:
+        return require_credential(v)
+
+
 class DeleteSubscriptionRequest(BaseModel):
     push_id_hash: str
     device_credential: str
