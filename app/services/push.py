@@ -3,7 +3,7 @@
 # Sends push notifications to iOS (APNs) and Android (FCM).
 #
 # Lock screen (visible to Apple/Google and anyone who sees the phone):
-#   "Someone you connected with may have an STI."
+#   "You have a new message. Open the app to read it."
 #
 # Custom data field `enc` (ciphertext from the sender's phone):
 #   Apple and Google transport it. They do not have the card token, so they
@@ -20,7 +20,7 @@ from app.services import dev_inbox
 
 logger = logging.getLogger(__name__)
 
-PUSH_ALERT_BODY = "Someone you connected with may have an STI."
+PUSH_ALERT_BODY = "You have a new message. Open the app to read it."
 
 APNS_HOST_PROD = "https://api.push.apple.com"
 APNS_HOST_DEV = "https://api.sandbox.push.apple.com"

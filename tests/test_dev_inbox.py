@@ -21,7 +21,8 @@ def test_other_device_receives_ciphertext_sender_does_not(client):
     notes = bob.json()["notifications"]
     assert len(notes) == 1
     assert notes[0]["enc"] == "ciphertext-for-pink"
-    assert "STI" in notes[0]["alert"]
+    assert notes[0]["alert"] == "You have a new message. Open the app to read it."
+    assert "STI" not in notes[0]["alert"]
 
     # Pulling consumes the inbox.
     again = pull_inbox(client, device="bob")

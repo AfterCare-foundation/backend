@@ -22,7 +22,7 @@ Sauna wristband pairing, CAPTCHA, and anomaly detection are not in this codebase
 
 Subscriptions expire after **60 days** and are deleted automatically.
 
-The infection name (gonorrhoea, syphilis, HIV, Mpox, HPV, …) is chosen in the **app** at notify time. The card is not tied to an STI. The phone should encrypt that choice; the lock-screen text is always generic: *Someone you connected with may have an STI.*
+The infection name (gonorrhoea, syphilis, HIV, Mpox, HPV, …) is chosen in the **app** at notify time. The card is not tied to an STI. The phone should encrypt that choice; the lock-screen text is always generic: *You have a new message. Open the app to read it.*
 
 Each card has its own token, so the app encrypts the STI type **once per contact**. Hashing and AES-GCM details: [docs/CRYPTO.md](docs/CRYPTO.md).
 
