@@ -103,7 +103,7 @@ All hashes are **64 lowercase hex characters** (SHA-256).
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health` | Liveness |
-| `POST` | `/subscribe` | Register this device on a scanned card |
+| `POST` | `/subscribe` | Register this device on a scanned card. A code holds at most 2 devices; a third gets `409 code_in_use` |
 | `DELETE` | `/subscribe` | Erase this device (GDPR) |
 | `POST` | `/notify` | Send or schedule notifications for one or more tokens |
 | `POST` | `/schedule` | Same as notify for a single future delivery |

@@ -129,3 +129,57 @@ def test_four_campaigns_in_thirty_days_blocks_the_fifth(client, sent):
     response, _ = notify(client, device="alice", card="pink")
     assert response.status_code == 429
     assert sent == []
+
+
+def test_third_device_cannot_join_a_code(client):
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+
+    third = client.post(
+        "/subscribe",
+        json={
+            "et_hash": sha256_hex("card:pink"),
+            "push_id_hash": sha256_hex("push:cara"),
+            "push_token": "push-token-cara",
+            "platform": "ios",
+            "device_credential": sha256_hex("secret:cara"),
+        },
+    )
+    assert third.status_code == 409
+    assert third.json()["detail"] == "code_in_use"
+
+
+def test_holder_can_rescan_own_code(client):
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+    subscribe(client, device="alice", card="pink")  # must still be 200
+
+
+def test_reinstalled_phone_keeps_its_slot_via_update_push_id(client):
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+
+    moved = client.post(
+        "/update-push-id",
+        json={
+            "old_push_id_hash": sha256_hex("push:bob"),
+            "new_push_id_hash": sha256_hex("push:bob2"),
+            "new_push_token": "push-token-bob2",
+            "new_platform": "ios",
+            "device_credential": sha256_hex("secret:bob"),
+        },
+    )
+    assert moved.status_code == 200, moved.text
+
+    # The new identity is on the code, so it can re-scan; a stranger still cannot.
+    again = client.post(
+        "/subscribe",
+        json={
+            "et_hash": sha256_hex("card:pink"),
+            "push_id_hash": sha256_hex("push:bob2"),
+            "push_token": "push-token-bob2",
+            "platform": "ios",
+            "device_credential": sha256_hex("secret:bob"),
+        },
+    )
+    assert again.status_code == 200, again.text
