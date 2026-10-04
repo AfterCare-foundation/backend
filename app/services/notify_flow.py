@@ -59,32 +59,42 @@ async def run_deliveries(
         )
 
     now = datetime.now(timezone.utc)
-    pushed = 0
-    scheduled = 0
-    recorded = not needs_record
-    succeeded: list[str] = []
 
+    # Step 1: validate EVERY item before sending anything.
+    # A bad item rejects the whole request and nothing goes out.
+    todo = []
     for item in deliveries:
         if item.et_hash in already:
-            continue
+            continue  # handled by an earlier call with this campaign_id
 
         if not await sender_is_subscribed(conn, item.et_hash, sender_push_id_hash):
             raise HTTPException(status_code=403, detail="Not a subscriber of this connection")
 
         if item.scheduled_at is not None:
-            scheduled_at = item.scheduled_at
-            if scheduled_at.tzinfo is None:
+            if item.scheduled_at.tzinfo is None:
                 raise HTTPException(status_code=400, detail="scheduled_at must include a timezone (UTC)")
-            if scheduled_at <= now:
+            if item.scheduled_at <= now:
                 raise HTTPException(status_code=400, detail="scheduled_at must be in the future")
-            if scheduled_at > now + timedelta(days=MAX_SCHEDULE_DAYS):
+            if item.scheduled_at > now + timedelta(days=MAX_SCHEDULE_DAYS):
                 raise HTTPException(
                     status_code=400,
                     detail=f"scheduled_at must be within {MAX_SCHEDULE_DAYS} days from now",
                 )
-            if not recorded:
-                await record_campaign_success(conn, sender_push_id_hash, campaign_id)
-                recorded = True
+        todo.append(item)
+
+    # Step 2: deliver. One broken contact must not stop the others.
+    # Each contact is recorded as soon as it is handled, so a retry with the
+    # same campaign_id skips it (no double sends).
+    pushed = 0
+    scheduled = 0
+    handled = 0
+    failed: list[str] = []
+    recorded = not needs_record
+
+    for item in todo:
+        if item.scheduled_at is not None:
+            await _record_campaign_once(conn, sender_push_id_hash, campaign_id, recorded)
+            recorded = True
             await conn.execute(
                 """
                 INSERT INTO pending_notifications
@@ -94,38 +104,36 @@ async def run_deliveries(
                 item.et_hash,
                 sender_push_id_hash,
                 item.encrypted_payload,
-                scheduled_at,
+                item.scheduled_at,
             )
             scheduled += 1
-            succeeded.append(item.et_hash)
-            already.add(item.et_hash)
-            continue
+        else:
+            recipients = await conn.fetch(
+                """
+                SELECT push_id_hash, push_token, platform
+                FROM token_subscriptions
+                WHERE et_hash = $1
+                  AND push_id_hash != $2
+                """,
+                item.et_hash,
+                sender_push_id_hash,
+            )
+            if not recipients:
+                continue  # nobody else on this code yet
 
-        recipients = await conn.fetch(
-            """
-            SELECT push_id_hash, push_token, platform
-            FROM token_subscriptions
-            WHERE et_hash = $1
-              AND push_id_hash != $2
-            """,
-            item.et_hash,
-            sender_push_id_hash,
-        )
-        if not recipients:
-            continue
+            accepted = await send_push_to_all(
+                recipients=[dict(r) for r in recipients],
+                encrypted_payload=item.encrypted_payload,
+            )
+            pushed += accepted
+            if accepted < len(recipients):
+                failed.append(item.et_hash)  # not recorded, so a retry can try again
+                continue
 
-        if not recorded:
-            await record_campaign_success(conn, sender_push_id_hash, campaign_id)
+            # Only a successful push uses up the rate limit.
+            await _record_campaign_once(conn, sender_push_id_hash, campaign_id, recorded)
             recorded = True
-        await send_push_to_all(
-            recipients=[dict(r) for r in recipients],
-            encrypted_payload=item.encrypted_payload,
-        )
-        pushed += len(recipients)
-        succeeded.append(item.et_hash)
-        already.add(item.et_hash)
 
-    for et_hash in succeeded:
         await conn.execute(
             """
             INSERT INTO campaign_contacts (campaign_id, et_hash)
@@ -133,12 +141,20 @@ async def run_deliveries(
             ON CONFLICT DO NOTHING
             """,
             campaign_id,
-            et_hash,
+            item.et_hash,
         )
+        handled += 1
 
     return {
-        "status": "ok",
+        "status": "partial" if failed else "ok",
         "pushed": pushed,
         "scheduled": scheduled,
-        "contacts": len(already_rows) + len(succeeded),
+        "failed": len(failed),
+        "failed_contacts": failed,
+        "contacts": len(already_rows) + handled,
     }
+
+
+async def _record_campaign_once(conn, push_id_hash, campaign_id, already_recorded: bool) -> None:
+    if not already_recorded:
+        await record_campaign_success(conn, push_id_hash, campaign_id)

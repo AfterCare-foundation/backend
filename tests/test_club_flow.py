@@ -183,3 +183,88 @@ def test_reinstalled_phone_keeps_its_slot_via_update_push_id(client):
         },
     )
     assert again.status_code == 200, again.text
+
+
+def _multi_notify(client, *, device, cards, campaign_id):
+    return client.post(
+        "/notify",
+        json={
+            "sender_push_id_hash": sha256_hex(f"push:{device}"),
+            "device_credential": sha256_hex(f"secret:{device}"),
+            "campaign_id": campaign_id,
+            "deliveries": [
+                {"et_hash": sha256_hex(f"card:{c}"), "encrypted_payload": f"ciphertext-for-{c}"}
+                for c in cards
+            ],
+        },
+    )
+
+
+def _three_contacts(client):
+    for card, other in (("pink", "bob"), ("green", "cara"), ("blue", "dan")):
+        subscribe(client, device="alice", card=card)
+        subscribe(client, device=other, card=card)
+
+
+def test_bad_item_rejects_whole_request_and_sends_nothing(client, sent):
+    _three_contacts(client)
+    subscribe(client, device="erin", card="stranger")  # alice is not on this code
+
+    response = _multi_notify(
+        client, device="alice", cards=["pink", "stranger", "blue"], campaign_id=str(uuid4())
+    )
+    assert response.status_code == 403
+    assert sent == []  # not even the valid first contact
+
+
+def test_one_failed_push_does_not_stop_the_rest_and_retry_is_safe(client, monkeypatch):
+    _three_contacts(client)
+    delivered = []
+    broken = {"on": True}
+
+    async def flaky(recipients, encrypted_payload):
+        if broken["on"] and encrypted_payload == "ciphertext-for-green":
+            return 0  # provider rejected this one
+        delivered.append(encrypted_payload)
+        return len(recipients)
+
+    monkeypatch.setattr("app.services.notify_flow.send_push_to_all", flaky)
+    campaign = str(uuid4())
+
+    first = _multi_notify(client, device="alice", cards=["pink", "green", "blue"], campaign_id=campaign)
+    assert first.status_code == 200
+    body = first.json()
+    assert body["status"] == "partial"
+    assert body["pushed"] == 2
+    assert body["failed"] == 1
+    assert body["failed_contacts"] == [sha256_hex("card:green")]
+    assert sorted(delivered) == ["ciphertext-for-blue", "ciphertext-for-pink"]
+
+    # Retry the same campaign: only the failed contact is attempted.
+    broken["on"] = False
+    retry = _multi_notify(client, device="alice", cards=["pink", "green", "blue"], campaign_id=campaign)
+    assert retry.json()["status"] == "ok"
+    assert retry.json()["contacts"] == 3
+    assert sorted(delivered) == [
+        "ciphertext-for-blue", "ciphertext-for-green", "ciphertext-for-pink",
+    ]  # pink and blue were not sent twice
+
+
+def test_all_pushes_failing_does_not_use_up_the_rate_limit(client, monkeypatch):
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+
+    async def always_fail(recipients, encrypted_payload):
+        return 0
+
+    monkeypatch.setattr("app.services.notify_flow.send_push_to_all", always_fail)
+    first, _ = notify(client, device="alice", card="pink")
+    assert first.json()["failed"] == 1
+
+    async def works(recipients, encrypted_payload):
+        return len(recipients)
+
+    monkeypatch.setattr("app.services.notify_flow.send_push_to_all", works)
+    second, _ = notify(client, device="alice", card="pink")  # new campaign, same day
+    assert second.status_code == 200, second.text
+    assert second.json()["pushed"] == 1

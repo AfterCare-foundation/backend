@@ -57,6 +57,7 @@ def sent(monkeypatch):
 
     async def fake(recipients, encrypted_payload):
         calls.append({"recipients": recipients, "enc": encrypted_payload})
+        return len(recipients)
 
     monkeypatch.setattr("app.services.notify_flow.send_push_to_all", fake)
     return calls

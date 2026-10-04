@@ -47,7 +47,7 @@ def _make_apns_jwt() -> str:
     )
 
 
-async def _send_apns(push_token: str, encrypted_payload: str) -> None:
+async def _send_apns(push_token: str, encrypted_payload: str) -> bool:
     auth_token = _make_apns_jwt()
     url = f"{_apns_host()}/3/device/{push_token}"
 
@@ -72,6 +72,7 @@ async def _send_apns(push_token: str, encrypted_payload: str) -> None:
 
     if response.status_code != 200:
         logger.error("APNs push failed: status=%s", response.status_code)
+    return response.status_code == 200
 
 
 def _get_fcm_access_token() -> tuple[str, str]:
@@ -88,7 +89,7 @@ def _get_fcm_access_token() -> tuple[str, str]:
     return credentials.token, project_id
 
 
-async def _send_fcm(push_token: str, encrypted_payload: str) -> None:
+async def _send_fcm(push_token: str, encrypted_payload: str) -> bool:
     access_token, project_id = _get_fcm_access_token()
     url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
 
@@ -108,6 +109,7 @@ async def _send_fcm(push_token: str, encrypted_payload: str) -> None:
 
     if response.status_code != 200:
         logger.error("FCM push failed: status=%s", response.status_code)
+    return response.status_code == 200
 
 
 async def send_push(
@@ -115,26 +117,39 @@ async def send_push(
     platform: str,
     encrypted_payload: str,
     push_id_hash: str,
-) -> None:
+) -> bool:
+    """
+    Send one push. Returns True if the provider accepted it.
+    Never raises: one broken recipient must not stop the others.
+    Logs the error type only, never the token or payload.
+    """
     if settings.push_stub_mode:
         logger.info("[PUSH STUB] would send to %s device", platform)
         if settings.environment == "development":
             dev_inbox.append(push_id_hash, encrypted_payload, PUSH_ALERT_BODY)
-        return
+        return True
 
-    if platform == "ios":
-        await _send_apns(push_token, encrypted_payload)
-    elif platform == "android":
-        await _send_fcm(push_token, encrypted_payload)
-    else:
+    try:
+        if platform == "ios":
+            return await _send_apns(push_token, encrypted_payload)
+        if platform == "android":
+            return await _send_fcm(push_token, encrypted_payload)
         logger.error("Unknown platform")
+    except Exception as exc:
+        logger.error("Push failed: %s", type(exc).__name__)
+    return False
 
 
-async def send_push_to_all(recipients: list[dict], encrypted_payload: str) -> None:
+async def send_push_to_all(recipients: list[dict], encrypted_payload: str) -> int:
+    """Send to every recipient. Returns how many pushes were accepted."""
+    accepted = 0
     for recipient in recipients:
-        await send_push(
+        ok = await send_push(
             recipient["push_token"],
             recipient["platform"],
             encrypted_payload,
             recipient["push_id_hash"],
         )
+        if ok:
+            accepted += 1
+    return accepted

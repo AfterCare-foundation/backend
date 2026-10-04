@@ -29,7 +29,7 @@ async def dispatch_pending_notifications():
         try:
             rows = await conn.fetch(
                 """
-                SELECT id, et_hash, sender_push_id_hash, encrypted_payload
+                SELECT id, et_hash, sender_push_id_hash, encrypted_payload, scheduled_at
                 FROM pending_notifications
                 WHERE scheduled_at <= NOW()
                 """
@@ -51,10 +51,15 @@ async def dispatch_pending_notifications():
                     row["sender_push_id_hash"],
                 )
                 if recipients:
-                    await send_push_to_all(
+                    accepted = await send_push_to_all(
                         recipients=[dict(r) for r in recipients],
                         encrypted_payload=row["encrypted_payload"],
                     )
+                    # Failed? Keep the row and retry on the next run,
+                    # but give up after a day so dead tokens do not pile up.
+                    too_old = row["scheduled_at"] < datetime.now(timezone.utc) - timedelta(days=1)
+                    if accepted < len(recipients) and not too_old:
+                        continue
                 await conn.execute(
                     "DELETE FROM pending_notifications WHERE id = $1",
                     row["id"],
