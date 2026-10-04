@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import app.database as database
-from app.services.push import send_push_to_all
+from app.services.push import send_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ async def dispatch_pending_notifications():
                 SELECT id, et_hash, sender_push_id_hash, encrypted_payload, scheduled_at
                 FROM pending_notifications
                 WHERE scheduled_at <= NOW()
+                ORDER BY scheduled_at
                 """
             )
             if not rows:
@@ -39,6 +40,11 @@ async def dispatch_pending_notifications():
 
             logger.info("Dispatching %s pending notification(s)", len(rows))
 
+            # Group by recipient device: if several due rows reach the same
+            # device (e.g. two codes with the same person, one STI scheduled
+            # for both), send ONE push carrying all ciphertexts.
+            recipients_of = {}
+            per_device = {}
             for row in rows:
                 recipients = await conn.fetch(
                     """
@@ -50,16 +56,24 @@ async def dispatch_pending_notifications():
                     row["et_hash"],
                     row["sender_push_id_hash"],
                 )
-                if recipients:
-                    accepted = await send_push_to_all(
-                        recipients=[dict(r) for r in recipients],
-                        encrypted_payload=row["encrypted_payload"],
+                recipients_of[row["id"]] = [r["push_id_hash"] for r in recipients]
+                for r in recipients:
+                    entry = per_device.setdefault(
+                        r["push_id_hash"], {"recipient": dict(r), "payloads": []}
                     )
-                    # Failed? Keep the row and retry on the next run,
-                    # but give up after a day so dead tokens do not pile up.
-                    too_old = row["scheduled_at"] < datetime.now(timezone.utc) - timedelta(days=1)
-                    if accepted < len(recipients) and not too_old:
-                        continue
+                    entry["payloads"].append(row["encrypted_payload"])
+
+            device_ok = {}
+            for device, entry in per_device.items():
+                device_ok[device] = await send_bundle(entry["recipient"], entry["payloads"]) >= 0
+
+            for row in rows:
+                # Failed? Keep the row and retry on the next run,
+                # but give up after a day so dead tokens do not pile up.
+                too_old = row["scheduled_at"] < datetime.now(timezone.utc) - timedelta(days=1)
+                all_ok = all(device_ok[d] for d in recipients_of[row["id"]])
+                if not all_ok and not too_old:
+                    continue
                 await conn.execute(
                     "DELETE FROM pending_notifications WHERE id = $1",
                     row["id"],

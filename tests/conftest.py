@@ -55,11 +55,11 @@ def sent(monkeypatch):
     """Capture push dispatches instead of calling APNs/FCM."""
     calls = []
 
-    async def fake(recipients, encrypted_payload):
-        calls.append({"recipients": recipients, "enc": encrypted_payload})
-        return len(recipients)
+    async def fake(recipient, payloads):
+        calls.append({"recipients": [recipient], "enc": payloads[0], "payloads": payloads})
+        return 1
 
-    monkeypatch.setattr("app.services.notify_flow.send_push_to_all", fake)
+    monkeypatch.setattr("app.services.notify_flow.send_bundle", fake)
     return calls
 
 

@@ -26,6 +26,18 @@ APNS_HOST_PROD = "https://api.push.apple.com"
 APNS_HOST_DEV = "https://api.sandbox.push.apple.com"
 
 
+# Keep one push well under the ~4 KB APNs limit.
+MAX_PUSH_CIPHERTEXT_CHARS = 3000
+
+
+def _custom_fields(payloads: list[str]) -> dict:
+    """`enc` = first ciphertext (as always); `more` = any further ones."""
+    fields = {"enc": payloads[0]}
+    if len(payloads) > 1:
+        fields["more"] = payloads[1:]
+    return fields
+
+
 def _apns_host() -> str:
     return APNS_HOST_PROD if settings.apns_production else APNS_HOST_DEV
 
@@ -47,7 +59,7 @@ def _make_apns_jwt() -> str:
     )
 
 
-async def _send_apns(push_token: str, encrypted_payload: str) -> bool:
+async def _send_apns(push_token: str, payloads: list[str]) -> bool:
     auth_token = _make_apns_jwt()
     url = f"{_apns_host()}/3/device/{push_token}"
 
@@ -59,7 +71,7 @@ async def _send_apns(push_token: str, encrypted_payload: str) -> bool:
                     "alert": PUSH_ALERT_BODY,
                     "sound": "default",
                 },
-                "enc": encrypted_payload,
+                **_custom_fields(payloads),
             },
             headers={
                 "authorization": f"bearer {auth_token}",
@@ -89,7 +101,7 @@ def _get_fcm_access_token() -> tuple[str, str]:
     return credentials.token, project_id
 
 
-async def _send_fcm(push_token: str, encrypted_payload: str) -> bool:
+async def _send_fcm(push_token: str, payloads: list[str]) -> bool:
     access_token, project_id = _get_fcm_access_token()
     url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
 
@@ -100,7 +112,8 @@ async def _send_fcm(push_token: str, encrypted_payload: str) -> bool:
                 "message": {
                     "token": push_token,
                     "notification": {"body": PUSH_ALERT_BODY},
-                    "data": {"enc": encrypted_payload},
+                    "data": {k: v if isinstance(v, str) else json.dumps(v)
+                             for k, v in _custom_fields(payloads).items()},
                 }
             },
             headers={"Authorization": f"Bearer {access_token}"},
@@ -115,41 +128,64 @@ async def _send_fcm(push_token: str, encrypted_payload: str) -> bool:
 async def send_push(
     push_token: str,
     platform: str,
-    encrypted_payload: str,
+    encrypted_payloads: list[str],
     push_id_hash: str,
 ) -> bool:
     """
-    Send one push. Returns True if the provider accepted it.
+    Send ONE push carrying one or more ciphertexts. True if the provider accepted it.
     Never raises: one broken recipient must not stop the others.
     Logs the error type only, never the token or payload.
     """
     if settings.push_stub_mode:
         logger.info("[PUSH STUB] would send to %s device", platform)
         if settings.environment == "development":
-            dev_inbox.append(push_id_hash, encrypted_payload, PUSH_ALERT_BODY)
+            dev_inbox.append(push_id_hash, encrypted_payloads, PUSH_ALERT_BODY)
         return True
 
     try:
         if platform == "ios":
-            return await _send_apns(push_token, encrypted_payload)
+            return await _send_apns(push_token, encrypted_payloads)
         if platform == "android":
-            return await _send_fcm(push_token, encrypted_payload)
+            return await _send_fcm(push_token, encrypted_payloads)
         logger.error("Unknown platform")
     except Exception as exc:
         logger.error("Push failed: %s", type(exc).__name__)
     return False
 
 
+async def send_bundle(recipient: dict, encrypted_payloads: list[str]) -> int:
+    """
+    One device, several ciphertexts (same person reached through several codes).
+    The device buzzes once per push; ciphertexts are packed together so it
+    normally gets exactly one. Returns the number of pushes accepted, or -1 if
+    any push of the bundle failed.
+    """
+    chunks: list[list[str]] = [[]]
+    size = 0
+    for payload in encrypted_payloads:
+        if chunks[-1] and size + len(payload) > MAX_PUSH_CIPHERTEXT_CHARS:
+            chunks.append([])
+            size = 0
+        chunks[-1].append(payload)
+        size += len(payload)
+
+    accepted = 0
+    for chunk in chunks:
+        ok = await send_push(
+            recipient["push_token"], recipient["platform"], chunk, recipient["push_id_hash"]
+        )
+        if not ok:
+            return -1
+        accepted += 1
+    return accepted
+
+
 async def send_push_to_all(recipients: list[dict], encrypted_payload: str) -> int:
-    """Send to every recipient. Returns how many pushes were accepted."""
+    """Same ciphertext to every recipient (scheduled dispatch). Returns pushes accepted."""
     accepted = 0
     for recipient in recipients:
-        ok = await send_push(
-            recipient["push_token"],
-            recipient["platform"],
-            encrypted_payload,
-            recipient["push_id_hash"],
-        )
-        if ok:
+        if await send_push(
+            recipient["push_token"], recipient["platform"], [encrypted_payload], recipient["push_id_hash"]
+        ):
             accepted += 1
     return accepted

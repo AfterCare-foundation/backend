@@ -14,11 +14,12 @@ def clear() -> None:
     _items.clear()
 
 
-def append(push_id_hash: str, encrypted_payload: str, alert: str) -> None:
-    _items[push_id_hash.strip()].append({
-        "enc": encrypted_payload,
-        "alert": alert,
-    })
+def append(push_id_hash: str, encrypted_payloads: list[str], alert: str) -> None:
+    """Same fields as the real push: `enc` is the first ciphertext, `more` the rest."""
+    item = {"enc": encrypted_payloads[0], "alert": alert}
+    if len(encrypted_payloads) > 1:
+        item["more"] = encrypted_payloads[1:]
+    _items[push_id_hash.strip()].append(item)
 
 
 def take(push_id_hash: str) -> list[dict]:

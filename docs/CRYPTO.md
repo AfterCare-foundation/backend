@@ -55,6 +55,12 @@ The partner decrypts with the same `TOKEN` from their scan. Lock screen stays ge
 
 Push custom field: `enc` = the same Base64 string you put in `encrypted_payload`.
 
+If one person is reached through several of the sender's codes in the same
+`/notify` call, they get ONE push. `enc` holds the first ciphertext and `more`
+(a list of Base64 strings, present only then) holds the others. The app must
+decrypt `enc` and every entry of `more` (each with the key from its own card)
+and show each STI once. Android delivers `more` as a JSON-encoded string.
+
 ---
 
 ## 3. Notify body (reminder)

@@ -2,7 +2,7 @@
 
 from uuid import uuid4
 
-from tests.conftest import notify, sha256_hex, subscribe
+from tests.conftest import notify, pull_inbox, sha256_hex, subscribe
 
 
 def test_health(client):
@@ -222,13 +222,13 @@ def test_one_failed_push_does_not_stop_the_rest_and_retry_is_safe(client, monkey
     delivered = []
     broken = {"on": True}
 
-    async def flaky(recipients, encrypted_payload):
-        if broken["on"] and encrypted_payload == "ciphertext-for-green":
-            return 0  # provider rejected this one
-        delivered.append(encrypted_payload)
-        return len(recipients)
+    async def flaky(recipient, payloads):
+        if broken["on"] and payloads == ["ciphertext-for-green"]:
+            return -1  # provider rejected this one
+        delivered.extend(payloads)
+        return 1
 
-    monkeypatch.setattr("app.services.notify_flow.send_push_to_all", flaky)
+    monkeypatch.setattr("app.services.notify_flow.send_bundle", flaky)
     campaign = str(uuid4())
 
     first = _multi_notify(client, device="alice", cards=["pink", "green", "blue"], campaign_id=campaign)
@@ -254,17 +254,124 @@ def test_all_pushes_failing_does_not_use_up_the_rate_limit(client, monkeypatch):
     subscribe(client, device="alice", card="pink")
     subscribe(client, device="bob", card="pink")
 
-    async def always_fail(recipients, encrypted_payload):
-        return 0
+    async def always_fail(recipient, payloads):
+        return -1
 
-    monkeypatch.setattr("app.services.notify_flow.send_push_to_all", always_fail)
+    monkeypatch.setattr("app.services.notify_flow.send_bundle", always_fail)
     first, _ = notify(client, device="alice", card="pink")
     assert first.json()["failed"] == 1
 
-    async def works(recipients, encrypted_payload):
-        return len(recipients)
+    async def works(recipient, payloads):
+        return 1
 
-    monkeypatch.setattr("app.services.notify_flow.send_push_to_all", works)
+    monkeypatch.setattr("app.services.notify_flow.send_bundle", works)
     second, _ = notify(client, device="alice", card="pink")  # new campaign, same day
     assert second.status_code == 200, second.text
     assert second.json()["pushed"] == 1
+
+
+def _two_codes_with_same_person(client):
+    for card in ("pink", "green"):
+        subscribe(client, device="bob", card=card)
+        subscribe(client, device="alice", card=card)
+
+
+def test_same_device_on_two_contacts_gets_one_push_with_both_ciphertexts(client, sent):
+    _two_codes_with_same_person(client)
+
+    response = _multi_notify(client, device="bob", cards=["pink", "green"], campaign_id=str(uuid4()))
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["pushed"] == 1
+    assert body["contacts"] == 2  # both contacts count as handled
+    assert len(sent) == 1
+    # Nothing is dropped: a second STI for the same person must still arrive.
+    assert sent[0]["payloads"] == ["ciphertext-for-pink", "ciphertext-for-green"]
+
+
+def test_dedupe_applies_to_the_dev_inbox_too(client):
+    _two_codes_with_same_person(client)
+    _multi_notify(client, device="bob", cards=["pink", "green"], campaign_id=str(uuid4()))
+
+    notes = pull_inbox(client, device="alice").json()["notifications"]
+    assert len(notes) == 1
+    assert notes[0]["enc"] == "ciphertext-for-pink"
+    assert notes[0]["more"] == ["ciphertext-for-green"]
+
+
+def test_separate_campaigns_both_deliver(client, sent):
+    _two_codes_with_same_person(client)
+    first, _ = notify(client, device="bob", card="pink")
+    assert first.json()["pushed"] == 1
+
+    # Next day is simulated by clearing the rate limit rows.
+    from tests.conftest import PGPASSWORD  # noqa: F401
+    import os, subprocess
+    env = {**os.environ, "PGPASSWORD": PGPASSWORD}
+    subprocess.check_call(
+        ["psql", "-h", "localhost", "-U", "aftercare_dev", "-d", "aftercare_dev",
+         "-c", "UPDATE notification_campaigns SET created_at = NOW() - INTERVAL '2 days'"],
+        env=env, stdout=subprocess.DEVNULL,
+    )
+    second, _ = notify(client, device="bob", card="green")
+    assert second.json()["pushed"] == 1
+    assert len(sent) == 2
+
+
+def test_scheduled_delivery_for_same_device_is_kept(client, sent):
+    from datetime import datetime, timedelta, timezone
+
+    _two_codes_with_same_person(client)
+    later = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    response = client.post(
+        "/notify",
+        json={
+            "sender_push_id_hash": sha256_hex("push:bob"),
+            "device_credential": sha256_hex("secret:bob"),
+            "campaign_id": str(uuid4()),
+            "deliveries": [
+                {"et_hash": sha256_hex("card:pink"), "encrypted_payload": "later", "scheduled_at": later},
+                {"et_hash": sha256_hex("card:green"), "encrypted_payload": "now"},
+            ],
+        },
+    )
+    body = response.json()
+    assert body["pushed"] == 1
+    assert body["scheduled"] == 1  # it is a separate, later notification
+    assert sent[0]["payloads"] == ["now"]
+
+
+def test_scheduled_rows_for_same_device_are_sent_as_one_push(client, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    import os, subprocess
+    from tests.conftest import PGPASSWORD
+    from app.cron import dispatch_pending_notifications
+
+    _two_codes_with_same_person(client)
+    when = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
+    response = client.post(
+        "/notify",
+        json={
+            "sender_push_id_hash": sha256_hex("push:bob"),
+            "device_credential": sha256_hex("secret:bob"),
+            "campaign_id": str(uuid4()),
+            "deliveries": [
+                {"et_hash": sha256_hex(f"card:{c}"), "encrypted_payload": f"hiv-for-{c}", "scheduled_at": when}
+                for c in ("pink", "green")
+            ],
+        },
+    )
+    assert response.json()["scheduled"] == 2
+
+    # Fast-forward: the 10 days have passed.
+    subprocess.check_call(
+        ["psql", "-h", "localhost", "-U", "aftercare_dev", "-d", "aftercare_dev",
+         "-c", "UPDATE pending_notifications SET scheduled_at = NOW() - INTERVAL '1 minute'"],
+        env={**os.environ, "PGPASSWORD": PGPASSWORD}, stdout=subprocess.DEVNULL,
+    )
+
+    client.portal.call(dispatch_pending_notifications)
+
+    notes = pull_inbox(client, device="alice").json()["notifications"]
+    assert len(notes) == 1  # one buzz
+    assert [notes[0]["enc"], *notes[0]["more"]] == ["hiv-for-pink", "hiv-for-green"]

@@ -15,7 +15,7 @@ import asyncpg
 
 from app.config import settings
 from app.services.devices import verify_device
-from app.services.push import send_push_to_all
+from app.services.push import send_bundle
 from app.services.rate_limit import assert_campaign_allowed, record_campaign_success
 
 MAX_SCHEDULE_DAYS = 60
@@ -82,7 +82,34 @@ async def run_deliveries(
                 )
         todo.append(item)
 
-    # Step 2: deliver. One broken contact must not stop the others.
+    # Step 2: look up who receives each contact.
+    # A device can be on several of the sender's contacts (same person, two
+    # codes), possibly with a different STI each time. The server cannot see the
+    # STI, so it never drops a delivery: one device gets ONE push that carries
+    # all its ciphertexts (`enc` + `more`), and the app shows each STI once.
+    recipients_of = []
+    for item in todo:
+        recipients_of.append(await conn.fetch(
+            """
+            SELECT push_id_hash, push_token, platform
+            FROM token_subscriptions
+            WHERE et_hash = $1
+              AND push_id_hash != $2
+            """,
+            item.et_hash,
+            sender_push_id_hash,
+        ))
+
+    # Immediate deliveries grouped by recipient device, in request order.
+    per_device: dict[str, dict] = {}
+    for i, item in enumerate(todo):
+        if item.scheduled_at is not None:
+            continue
+        for r in recipients_of[i]:
+            entry = per_device.setdefault(r["push_id_hash"], {"recipient": dict(r), "payloads": []})
+            entry["payloads"].append(item.encrypted_payload)
+
+    # Step 3: deliver. One broken contact must not stop the others.
     # Each contact is recorded as soon as it is handled, so a retry with the
     # same campaign_id skips it (no double sends).
     pushed = 0
@@ -91,7 +118,13 @@ async def run_deliveries(
     failed: list[str] = []
     recorded = not needs_record
 
-    for item in todo:
+    device_ok: dict[str, bool] = {}
+    for device, entry in per_device.items():
+        count = await send_bundle(entry["recipient"], entry["payloads"])
+        device_ok[device] = count >= 0
+        pushed += max(count, 0)
+
+    for i, item in enumerate(todo):
         if item.scheduled_at is not None:
             await _record_campaign_once(conn, sender_push_id_hash, campaign_id, recorded)
             recorded = True
@@ -108,28 +141,11 @@ async def run_deliveries(
             )
             scheduled += 1
         else:
-            recipients = await conn.fetch(
-                """
-                SELECT push_id_hash, push_token, platform
-                FROM token_subscriptions
-                WHERE et_hash = $1
-                  AND push_id_hash != $2
-                """,
-                item.et_hash,
-                sender_push_id_hash,
-            )
-            if not recipients:
+            if not recipients_of[i]:
                 continue  # nobody else on this code yet
-
-            accepted = await send_push_to_all(
-                recipients=[dict(r) for r in recipients],
-                encrypted_payload=item.encrypted_payload,
-            )
-            pushed += accepted
-            if accepted < len(recipients):
+            if not all(device_ok[r["push_id_hash"]] for r in recipients_of[i]):
                 failed.append(item.et_hash)  # not recorded, so a retry can try again
                 continue
-
             # Only a successful push uses up the rate limit.
             await _record_campaign_once(conn, sender_push_id_hash, campaign_id, recorded)
             recorded = True
