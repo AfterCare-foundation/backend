@@ -37,8 +37,8 @@ Each card has its own token, so the app encrypts the STI type **once per contact
 
 ### Notify limits (per device)
 
-- At least **1 day** between campaigns (not two on the same day).
-- At most **4 campaigns** in a rolling **30 days**.
+- At most **3 campaigns per rolling 24 hours** (for example one per infection in one sitting).
+- At most **6 campaigns** in a rolling **30 days**.
 - At most **100 unique card tokens** per campaign.
 
 A *campaign* is one tap of Notify in the app (`campaign_id`). Several HTTP calls with the same id count as one campaign.

@@ -1,8 +1,9 @@
 # app/services/rate_limit.py
 #
 # Two caps on new campaigns (same campaign_id does not count twice):
-#   - at least 1 day between campaigns (no two on the same day)
-#   - at most 4 campaigns per rolling 30 days
+#   - at most 3 campaigns per rolling 24 hours (one run per infection, a few per sitting)
+#   - at most 4 campaigns per rolling 30 days (the total limit)
+# The server never learns which infection a campaign is about.
 
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -31,22 +32,24 @@ async def assert_campaign_allowed(
             raise HTTPException(status_code=403, detail="Campaign does not belong to this device")
         return False
 
-    last = await conn.fetchval(
+    now = datetime.now(timezone.utc)
+
+    today = await conn.fetchval(
         """
-        SELECT MAX(created_at) FROM notification_campaigns
+        SELECT COUNT(*) FROM notification_campaigns
         WHERE push_id_hash = $1
+          AND created_at >= $2
         """,
         push_id_hash,
+        now - timedelta(hours=24),
     )
-    if last is not None:
-        min_gap = timedelta(days=settings.notify_min_days_between_campaigns)
-        if datetime.now(timezone.utc) - last < min_gap:
-            raise HTTPException(
-                status_code=429,
-                detail=f"At most one notification campaign every {settings.notify_min_days_between_campaigns} days",
-            )
+    if today >= settings.notify_max_campaigns_per_day:
+        raise HTTPException(
+            status_code=429,
+            detail=f"At most {settings.notify_max_campaigns_per_day} campaigns per day",
+        )
 
-    window_start = datetime.now(timezone.utc) - timedelta(days=settings.notify_rate_limit_days)
+    window_start = now - timedelta(days=settings.notify_rate_limit_days)
     used = await conn.fetchval(
         """
         SELECT COUNT(*) FROM notification_campaigns
@@ -60,8 +63,8 @@ async def assert_campaign_allowed(
         raise HTTPException(
             status_code=429,
             detail=(
-                f"At most {settings.notify_max_campaigns} notification campaigns "
-                f"are allowed every {settings.notify_rate_limit_days} days"
+                f"At most {settings.notify_max_campaigns} campaigns "
+                f"per {settings.notify_rate_limit_days} days"
             ),
         )
     return True

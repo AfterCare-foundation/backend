@@ -70,16 +70,33 @@ def test_same_campaign_can_cover_more_tokens(client, sent):
     assert len(sent) == 2
 
 
-def test_second_campaign_same_day_is_rate_limited(client, sent):
+def test_three_campaigns_in_a_day_succeed_and_the_fourth_is_blocked(client, sent):
     subscribe(client, device="alice", card="pink")
     subscribe(client, device="bob", card="pink")
 
-    first, _ = notify(client, device="alice", card="pink")
-    assert first.status_code == 200
+    for _ in range(3):  # e.g. three infections in one sitting
+        response, _body = notify(client, device="alice", card="pink")
+        assert response.status_code == 200, response.text
 
-    second, _ = notify(client, device="alice", card="pink")
-    assert second.status_code == 429
-    assert len(sent) == 1
+    fourth, _ = notify(client, device="alice", card="pink")
+    assert fourth.status_code == 429
+    assert fourth.json()["detail"] == "At most 3 campaigns per day"
+    assert len(sent) == 3
+
+
+def test_resending_a_recorded_campaign_does_not_count(client, sent):
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+
+    first, body = notify(client, device="alice", card="pink")
+    assert first.status_code == 200
+    notify(client, device="alice", card="pink")
+    notify(client, device="alice", card="pink")  # three campaigns used today
+
+    again = client.post("/notify", json=body)  # same campaign_id as the first
+    assert again.status_code == 200, again.text
+    assert again.json()["pushed"] == 0  # nothing new, nothing sent twice
+    assert len(sent) == 3
 
 
 def test_empty_notify_does_not_consume_rate_limit(client, sent):
@@ -98,7 +115,7 @@ def test_empty_notify_does_not_consume_rate_limit(client, sent):
     assert len(sent) == 1
 
 
-def test_four_campaigns_in_thirty_days_blocks_the_fifth(client, sent):
+def test_six_campaigns_in_thirty_days_blocks_the_seventh(client, sent):
     import os
     import subprocess
     from tests.conftest import PGPASSWORD
@@ -109,13 +126,15 @@ def test_four_campaigns_in_thirty_days_blocks_the_fifth(client, sent):
     alice_push = sha256_hex("push:alice")
     env = os.environ.copy()
     env["PGPASSWORD"] = PGPASSWORD
-    # Four older campaigns, last one 2 days ago so the 1-day gap is satisfied.
+    # Six older campaigns spread over several days, none within the last 24 hours.
     sql = f"""
         INSERT INTO notification_campaigns (campaign_id, push_id_hash, created_at) VALUES
-          ('11111111-1111-1111-1111-111111111111', '{alice_push}', NOW() - INTERVAL '20 days'),
-          ('22222222-2222-2222-2222-222222222222', '{alice_push}', NOW() - INTERVAL '14 days'),
-          ('33333333-3333-3333-3333-333333333333', '{alice_push}', NOW() - INTERVAL '8 days'),
-          ('44444444-4444-4444-4444-444444444444', '{alice_push}', NOW() - INTERVAL '2 days');
+          ('11111111-1111-1111-1111-111111111111', '{alice_push}', NOW() - INTERVAL '28 days'),
+          ('22222222-2222-2222-2222-222222222222', '{alice_push}', NOW() - INTERVAL '23 days'),
+          ('33333333-3333-3333-3333-333333333333', '{alice_push}', NOW() - INTERVAL '18 days'),
+          ('44444444-4444-4444-4444-444444444444', '{alice_push}', NOW() - INTERVAL '13 days'),
+          ('55555555-5555-5555-5555-555555555555', '{alice_push}', NOW() - INTERVAL '8 days'),
+          ('66666666-6666-6666-6666-666666666666', '{alice_push}', NOW() - INTERVAL '2 days');
     """
     subprocess.check_call(
         [
@@ -128,6 +147,7 @@ def test_four_campaigns_in_thirty_days_blocks_the_fifth(client, sent):
 
     response, _ = notify(client, device="alice", card="pink")
     assert response.status_code == 429
+    assert response.json()["detail"] == "At most 6 campaigns per 30 days"
     assert sent == []
 
 

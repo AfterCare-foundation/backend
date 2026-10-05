@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     push_stub_mode: bool = True
 
     notify_rate_limit_days: int = 30
-    notify_max_campaigns: int = 4
-    notify_min_days_between_campaigns: int = 1
+    notify_max_campaigns: int = 6
+    notify_max_campaigns_per_day: int = 3  # rolling 24 hours
     notify_max_contacts_per_campaign: int = 100
 
 
