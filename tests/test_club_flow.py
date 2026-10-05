@@ -56,18 +56,29 @@ def test_wrong_device_credential_rejected(client):
     assert response.status_code == 403
 
 
-def test_same_campaign_can_cover_more_tokens(client, sent):
+def test_one_campaign_can_cover_several_contacts_in_one_request(client, sent):
     subscribe(client, device="alice", card="pink")
     subscribe(client, device="bob", card="pink")
     subscribe(client, device="alice", card="green")
     subscribe(client, device="cara", card="green")
 
-    campaign_id = str(uuid4())
-    first, _ = notify(client, device="alice", card="pink", campaign_id=campaign_id)
-    assert first.status_code == 200
-    second, _ = notify(client, device="alice", card="green", campaign_id=campaign_id)
-    assert second.status_code == 200, second.text
+    response = _multi_notify(client, device="alice", cards=["pink", "green"], campaign_id=str(uuid4()))
+    assert response.status_code == 200, response.text
+    assert response.json()["pushed"] == 2
     assert len(sent) == 2
+
+
+def test_campaign_id_can_only_be_used_once(client, sent):
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+
+    first, body = notify(client, device="alice", card="pink")
+    assert first.status_code == 200
+
+    again = client.post("/notify", json=body)  # same campaign_id
+    assert again.status_code == 409
+    assert again.json()["detail"] == "campaign_already_used"
+    assert len(sent) == 1  # bob was not pushed twice
 
 
 def test_three_campaigns_in_a_day_succeed_and_the_fourth_is_blocked(client, sent):
@@ -81,21 +92,6 @@ def test_three_campaigns_in_a_day_succeed_and_the_fourth_is_blocked(client, sent
     fourth, _ = notify(client, device="alice", card="pink")
     assert fourth.status_code == 429
     assert fourth.json()["detail"] == "At most 3 campaigns per day"
-    assert len(sent) == 3
-
-
-def test_resending_a_recorded_campaign_does_not_count(client, sent):
-    subscribe(client, device="alice", card="pink")
-    subscribe(client, device="bob", card="pink")
-
-    first, body = notify(client, device="alice", card="pink")
-    assert first.status_code == 200
-    notify(client, device="alice", card="pink")
-    notify(client, device="alice", card="pink")  # three campaigns used today
-
-    again = client.post("/notify", json=body)  # same campaign_id as the first
-    assert again.status_code == 200, again.text
-    assert again.json()["pushed"] == 0  # nothing new, nothing sent twice
     assert len(sent) == 3
 
 
@@ -237,7 +233,13 @@ def test_bad_item_rejects_whole_request_and_sends_nothing(client, sent):
     assert sent == []  # not even the valid first contact
 
 
-def test_one_failed_push_does_not_stop_the_rest_and_retry_is_safe(client, monkeypatch):
+def _run_dispatcher(client):
+    from app.cron import dispatch_pending_notifications
+
+    client.portal.call(dispatch_pending_notifications)
+
+
+def test_one_failed_push_does_not_stop_the_rest_and_the_server_retries_it(client, monkeypatch):
     _three_contacts(client)
     delivered = []
     broken = {"on": True}
@@ -249,45 +251,54 @@ def test_one_failed_push_does_not_stop_the_rest_and_retry_is_safe(client, monkey
         return 1
 
     monkeypatch.setattr("app.services.notify_flow.send_bundle", flaky)
-    campaign = str(uuid4())
+    monkeypatch.setattr("app.cron.send_bundle", flaky)
 
-    first = _multi_notify(client, device="alice", cards=["pink", "green", "blue"], campaign_id=campaign)
-    assert first.status_code == 200
-    body = first.json()
-    assert body["status"] == "partial"
+    response = _multi_notify(client, device="alice", cards=["pink", "green", "blue"], campaign_id=str(uuid4()))
+    body = response.json()
+    assert response.status_code == 200
+    assert body["status"] == "ok"
     assert body["pushed"] == 2
-    assert body["failed"] == 1
-    assert body["failed_contacts"] == [sha256_hex("card:green")]
+    assert body["retrying"] == 1
     assert sorted(delivered) == ["ciphertext-for-blue", "ciphertext-for-pink"]
 
-    # Retry the same campaign: only the failed contact is attempted.
+    # Still broken: the dispatcher tries again and keeps it queued.
+    _run_dispatcher(client)
+    assert "ciphertext-for-green" not in delivered
+
+    # Provider recovers: the next dispatcher run delivers it, only once.
     broken["on"] = False
-    retry = _multi_notify(client, device="alice", cards=["pink", "green", "blue"], campaign_id=campaign)
-    assert retry.json()["status"] == "ok"
-    assert retry.json()["contacts"] == 3
+    _run_dispatcher(client)
+    _run_dispatcher(client)
     assert sorted(delivered) == [
         "ciphertext-for-blue", "ciphertext-for-green", "ciphertext-for-pink",
-    ]  # pink and blue were not sent twice
+    ]
 
 
-def test_all_pushes_failing_does_not_use_up_the_rate_limit(client, monkeypatch):
+def test_all_pushes_failing_still_uses_one_slot_and_is_retried(client, monkeypatch):
     subscribe(client, device="alice", card="pink")
     subscribe(client, device="bob", card="pink")
+    delivered = []
+    broken = {"on": True}
 
-    async def always_fail(recipient, payloads):
-        return -1
-
-    monkeypatch.setattr("app.services.notify_flow.send_bundle", always_fail)
-    first, _ = notify(client, device="alice", card="pink")
-    assert first.json()["failed"] == 1
-
-    async def works(recipient, payloads):
+    async def sometimes(recipient, payloads):
+        if broken["on"]:
+            return -1
+        delivered.extend(payloads)
         return 1
 
-    monkeypatch.setattr("app.services.notify_flow.send_bundle", works)
-    second, _ = notify(client, device="alice", card="pink")  # new campaign, same day
-    assert second.status_code == 200, second.text
-    assert second.json()["pushed"] == 1
+    monkeypatch.setattr("app.services.notify_flow.send_bundle", sometimes)
+    monkeypatch.setattr("app.cron.send_bundle", sometimes)
+
+    first, body = notify(client, device="alice", card="pink")
+    assert first.json()["retrying"] == 1
+    assert first.json()["pushed"] == 0
+
+    again = client.post("/notify", json=body)  # same campaign_id
+    assert again.status_code == 409  # used once; the server owns the retry
+
+    broken["on"] = False
+    _run_dispatcher(client)
+    assert delivered == ["ciphertext-for-pink"]
 
 
 def _two_codes_with_same_person(client):

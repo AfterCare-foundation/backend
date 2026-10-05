@@ -30,7 +30,7 @@ def wipe_db():
             "-v", "ON_ERROR_STOP=1",
             "-c",
             """
-            TRUNCATE campaign_contacts, pending_notifications,
+            TRUNCATE pending_notifications,
                      notification_campaigns, token_subscriptions, devices
             CASCADE;
             """,

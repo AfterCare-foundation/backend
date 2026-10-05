@@ -41,7 +41,7 @@ Each card has its own token, so the app encrypts the STI type **once per contact
 - At most **6 campaigns** in a rolling **30 days**.
 - At most **100 unique card tokens** per campaign.
 
-A *campaign* is one tap of Notify in the app (`campaign_id`). Several HTTP calls with the same id count as one campaign.
+A *campaign* is one tap of Notify in the app (`campaign_id`), sent in **one** request. A `campaign_id` can be used once: a second request with the same id gets `409 campaign_already_used`. If a push fails, the server retries it itself (every 15 minutes, for up to a day) and the response says how many are `retrying`; the app never retries. If nobody could be reached at all (no one else on the codes yet), the id and the slot are given back. The server keeps only the campaign id, the sender device and the time, never which contacts were reached.
 
 ---
 

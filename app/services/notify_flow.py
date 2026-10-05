@@ -16,7 +16,7 @@ import asyncpg
 from app.config import settings
 from app.services.devices import verify_device
 from app.services.push import send_bundle
-from app.services.rate_limit import assert_campaign_allowed, record_campaign_success
+from app.services.rate_limit import claim_campaign, release_campaign
 
 MAX_SCHEDULE_DAYS = 60
 
@@ -42,17 +42,9 @@ async def run_deliveries(
     deliveries: list,
 ) -> dict:
     await verify_device(conn, sender_push_id_hash, device_credential)
-    needs_record = await assert_campaign_allowed(conn, sender_push_id_hash, campaign_id)
 
-    already_rows = await conn.fetch(
-        "SELECT et_hash FROM campaign_contacts WHERE campaign_id = $1",
-        campaign_id,
-    )
-    already = {row["et_hash"].strip() for row in already_rows}
-
-    unique_requested = list(dict.fromkeys(item.et_hash for item in deliveries))
-    new_contacts = [et for et in unique_requested if et not in already]
-    if len(already) + len(new_contacts) > settings.notify_max_contacts_per_campaign:
+    unique_requested = {item.et_hash for item in deliveries}
+    if len(unique_requested) > settings.notify_max_contacts_per_campaign:
         raise HTTPException(
             status_code=400,
             detail=f"A campaign can notify at most {settings.notify_max_contacts_per_campaign} contacts",
@@ -64,9 +56,6 @@ async def run_deliveries(
     # A bad item rejects the whole request and nothing goes out.
     todo = []
     for item in deliveries:
-        if item.et_hash in already:
-            continue  # handled by an earlier call with this campaign_id
-
         if not await sender_is_subscribed(conn, item.et_hash, sender_push_id_hash):
             raise HTTPException(status_code=403, detail="Not a subscriber of this connection")
 
@@ -81,6 +70,10 @@ async def run_deliveries(
                     detail=f"scheduled_at must be within {MAX_SCHEDULE_DAYS} days from now",
                 )
         todo.append(item)
+
+    # A campaign_id works once: this also stops a resent request from
+    # pushing to the same contacts twice. Released below if nothing is sent.
+    await claim_campaign(conn, sender_push_id_hash, campaign_id)
 
     # Step 2: look up who receives each contact.
     # A device can be on several of the sender's contacts (same person, two
@@ -110,13 +103,13 @@ async def run_deliveries(
             entry["payloads"].append(item.encrypted_payload)
 
     # Step 3: deliver. One broken contact must not stop the others.
-    # Each contact is recorded as soon as it is handled, so a retry with the
-    # same campaign_id skips it (no double sends).
+    # A push that fails is queued as a "due now" pending notification: the
+    # 15-minute dispatcher retries it and gives up after a day. The app never
+    # has to retry, and the campaign is used up exactly once.
     pushed = 0
     scheduled = 0
     handled = 0
-    failed: list[str] = []
-    recorded = not needs_record
+    retrying = 0
 
     device_ok: dict[str, bool] = {}
     for device, entry in per_device.items():
@@ -126,8 +119,6 @@ async def run_deliveries(
 
     for i, item in enumerate(todo):
         if item.scheduled_at is not None:
-            await _record_campaign_once(conn, sender_push_id_hash, campaign_id, recorded)
-            recorded = True
             await conn.execute(
                 """
                 INSERT INTO pending_notifications
@@ -144,33 +135,31 @@ async def run_deliveries(
             if not recipients_of[i]:
                 continue  # nobody else on this code yet
             if not all(device_ok[r["push_id_hash"]] for r in recipients_of[i]):
-                failed.append(item.et_hash)  # not recorded, so a retry can try again
+                await conn.execute(
+                    """
+                    INSERT INTO pending_notifications
+                        (et_hash, sender_push_id_hash, encrypted_payload, scheduled_at)
+                    VALUES ($1, $2, $3, NOW())
+                    """,
+                    item.et_hash,
+                    sender_push_id_hash,
+                    item.encrypted_payload,
+                )
+                retrying += 1
+                handled += 1
                 continue
-            # Only a successful push uses up the rate limit.
-            await _record_campaign_once(conn, sender_push_id_hash, campaign_id, recorded)
-            recorded = True
 
-        await conn.execute(
-            """
-            INSERT INTO campaign_contacts (campaign_id, et_hash)
-            VALUES ($1, $2)
-            ON CONFLICT DO NOTHING
-            """,
-            campaign_id,
-            item.et_hash,
-        )
         handled += 1
 
+    if pushed == 0 and scheduled == 0 and retrying == 0:
+        # Nothing went out (nobody on the codes yet):
+        # do not use up a slot, and let the app retry with the same id.
+        await release_campaign(conn, campaign_id)
+
     return {
-        "status": "partial" if failed else "ok",
+        "status": "ok",
         "pushed": pushed,
         "scheduled": scheduled,
-        "failed": len(failed),
-        "failed_contacts": failed,
-        "contacts": len(already_rows) + handled,
+        "retrying": retrying,  # pushes that failed and the server will retry itself
+        "contacts": handled,
     }
-
-
-async def _record_campaign_once(conn, push_id_hash, campaign_id, already_recorded: bool) -> None:
-    if not already_recorded:
-        await record_campaign_success(conn, push_id_hash, campaign_id)
