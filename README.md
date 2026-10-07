@@ -47,22 +47,20 @@ A *campaign* is one tap of Notify in the app (`campaign_id`), sent in **one** re
 
 ## Setup (local)
 
-You need **Python 3.11+** and **PostgreSQL**. This project uses a dedicated database so it stays separate from other work on the same machine.
+You need **Python 3.11**, [**uv**](https://docs.astral.sh/uv/) and **PostgreSQL**. This project uses a dedicated database so it stays separate from other work on the same machine.
 
 ```bash
 # Database (once)
 createuser aftercare_dev --pwprompt   # or use the role already created
 createdb aftercare_dev --owner=aftercare_dev
-psql -h localhost -U aftercare_dev -d aftercare_dev -f migrations/001_initial.sql
+for f in migrations/*.sql; do psql -h localhost -U aftercare_dev -d aftercare_dev -f "$f"; done
 
 # App
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync            # creates .venv with the exact versions in uv.lock
 cp .env.example .env
 # Edit DATABASE_URL if needed. Leave PUSH_STUB_MODE=true until you have APNs/FCM keys.
 
-uvicorn app.main:app --reload --no-access-log
+uv run uvicorn app.main:app --reload --no-access-log
 ```
 
 - Health: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
@@ -71,8 +69,10 @@ uvicorn app.main:app --reload --no-access-log
 Never commit `.env`, `.venv/`, or `secrets/`.
 
 ```bash
-pytest
+uv run pytest
 ```
+
+Dependencies are listed in `pyproject.toml` and pinned, including indirect ones, in `uv.lock`. Change a dependency with `uv add <package>` or `uv lock --upgrade-package <package>`, then commit both files.
 
 The connection pool sets PostgreSQL `TimeZone` to **UTC** for this app only.
 
