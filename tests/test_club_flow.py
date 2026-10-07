@@ -406,3 +406,22 @@ def test_scheduled_rows_for_same_device_are_sent_as_one_push(client, monkeypatch
     notes = pull_inbox(client, device="alice").json()["notifications"]
     assert len(notes) == 1  # one buzz
     assert [notes[0]["enc"], *notes[0]["more"]] == ["hiv-for-pink", "hiv-for-green"]
+
+
+def test_cleanup_deletes_subscriptions_older_than_the_ttl_only(client):
+    import os, subprocess
+    from app.cron import cleanup_expired_subscriptions
+    from tests.conftest import PGPASSWORD
+
+    subscribe(client, device="alice", card="old")
+    subscribe(client, device="alice", card="recent")
+    psql = ["psql", "-h", "localhost", "-U", "aftercare_dev", "-d", "aftercare_dev", "-t", "-A", "-c"]
+    env = {**os.environ, "PGPASSWORD": PGPASSWORD}
+    # 100 days: past the old 60-day limit, inside the new 180-day one. 200 days: expired.
+    subprocess.check_call(psql + [f"UPDATE token_subscriptions SET created_date = CURRENT_DATE - 200 WHERE et_hash = '{sha256_hex('card:old')}'"], env=env, stdout=subprocess.DEVNULL)
+    subprocess.check_call(psql + [f"UPDATE token_subscriptions SET created_date = CURRENT_DATE - 100 WHERE et_hash = '{sha256_hex('card:recent')}'"], env=env, stdout=subprocess.DEVNULL)
+
+    client.portal.call(cleanup_expired_subscriptions)
+
+    left = subprocess.check_output(psql + ["SELECT et_hash FROM token_subscriptions"], env=env, text=True).split()
+    assert left == [sha256_hex("card:recent")]

@@ -20,7 +20,7 @@ Sauna wristband pairing, CAPTCHA, and anomaly detection are not in this codebase
 | UTC **date** a card was scanned (`created_date`) | Encounter time |
 | Encrypted bytes for scheduled sends, deleted after dispatch | Plaintext STI type |
 
-Subscriptions expire after **60 days** and are deleted automatically.
+Subscriptions expire after **180 days** (`SUBSCRIPTION_TTL_DAYS`) and are deleted automatically. The clock starts at the first scan and a re-scan does not extend it.
 
 The infection name (gonorrhoea, syphilis, HIV, Mpox, HPV, …) is chosen in the **app** at notify time. The card is not tied to an STI. The phone should encrypt that choice; the lock-screen text is always generic: *You have a new message. Open the app to read it.*
 
@@ -86,7 +86,7 @@ See `.env.example`. Important flags:
 |---|---|
 | `ENVIRONMENT` | `development` enables `/docs`. Use `production` on the host. |
 | `PUSH_STUB_MODE` | `true` logs pushes instead of calling Apple/Google. |
-| `RUN_BACKGROUND_JOBS` | Dispatcher + 60-day cleanup in this process. |
+| `RUN_BACKGROUND_JOBS` | Dispatcher + daily cleanup (subscriptions older than `SUBSCRIPTION_TTL_DAYS`) in this process. |
 | `NOTIFY_*` | Campaign and contact caps (see above). |
 
 Production must use **HTTPS**. The device credential is sent on each mutating request; it is a bearer secret.

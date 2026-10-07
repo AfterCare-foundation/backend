@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     fcm_service_account_file: str = "secrets/fcm_service_account.json"
     push_stub_mode: bool = True
 
+    # How long a subscription (card scan) is kept. Cleanup deletes older ones.
+    # Set from the partner look-back periods in the STI guidelines (up to 6 months
+    # for chlamydia). Applies to existing rows too: expiry is created_date + this.
+    subscription_ttl_days: int = 180
+
     notify_rate_limit_days: int = 30
     notify_max_campaigns: int = 6
     notify_max_campaigns_per_day: int = 3  # rolling 24 hours

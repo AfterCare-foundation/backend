@@ -11,7 +11,7 @@
 --     require the real token to deliver pushes. It is never logged.
 --   - STI type is never stored. Scheduled rows keep only client-encrypted bytes
 --     until dispatch, then the row is deleted.
---   - All subscription data expires after 60 days
+--   - All subscription data expires after SUBSCRIPTION_TTL_DAYS (see app/config.py)
 
 
 -- ============================================================

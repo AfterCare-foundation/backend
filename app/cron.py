@@ -8,14 +8,13 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import app.database as database
+from app.config import settings
 from app.services.push import send_bundle
 
 logger = logging.getLogger(__name__)
 
 DISPATCH_INTERVAL_SECONDS = 15 * 60
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
-SUBSCRIPTION_TTL_DAYS = 60
-CAMPAIGN_TTL_DAYS = 30
 
 LOCK_DISPATCH = 87001
 LOCK_CLEANUP = 87002
@@ -88,7 +87,7 @@ async def cleanup_expired_subscriptions():
         if not locked:
             return
         try:
-            cutoff = datetime.now(timezone.utc).date() - timedelta(days=SUBSCRIPTION_TTL_DAYS)
+            cutoff = datetime.now(timezone.utc).date() - timedelta(days=settings.subscription_ttl_days)
             result = await conn.execute(
                 "DELETE FROM token_subscriptions WHERE created_date < $1",
                 cutoff,
@@ -106,7 +105,7 @@ async def cleanup_expired_subscriptions():
                 """
             )
 
-            campaign_cutoff = datetime.now(timezone.utc) - timedelta(days=CAMPAIGN_TTL_DAYS)
+            campaign_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.notify_rate_limit_days)  # campaigns only matter inside the rate-limit window
             await conn.execute(
                 "DELETE FROM notification_campaigns WHERE created_at < $1",
                 campaign_cutoff,

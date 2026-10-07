@@ -80,6 +80,4 @@ and show each STI once. Android delivers `more` as a JSON-encoded string.
 }
 ```
 
-Omit `scheduled_at` for immediate send. If present, it must be UTC with a timezone offset.
-
-Testing windows (when to schedule) are **client-only**. The server just stores `scheduled_at`.
+The app sends immediately and does not schedule: it never sets `scheduled_at` and never calls `/schedule`. When a test is reliable again is a clinical question that the recipient's clinic answers, so the server has no timing logic. `scheduled_at` stays an optional field for now; if present it must be UTC with a timezone offset.

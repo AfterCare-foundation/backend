@@ -31,7 +31,7 @@ async def update_push_id(body: UpdatePushIdRequest, conn: asyncpg.Connection = D
 
         # Subscriptions point at devices(push_id_hash), so lift them out first,
         # rename the device, then put them back under the new ID.
-        # created_date is kept, so the 60-day clock does not restart.
+        # created_date is kept, so the retention clock does not restart.
         subs = await conn.fetch(
             "SELECT et_hash, created_date FROM token_subscriptions WHERE push_id_hash = $1",
             old,
