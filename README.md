@@ -18,7 +18,7 @@ Sauna wristband pairing, CAPTCHA, and anomaly detection are not in this codebase
 | `SHA-256` of the device credential | Names, email, phone, location |
 | Hashed push ID + the real push token (Apple/Google need it to deliver) | IP addresses |
 | UTC **date** a card was scanned (`created_date`) | Encounter time |
-| Encrypted bytes for scheduled sends, deleted after dispatch | Plaintext STI type |
+| Encrypted bytes of a push that failed, until the retry succeeds (at most a day) | Plaintext STI type |
 
 Subscriptions expire after **180 days** (`SUBSCRIPTION_TTL_DAYS`) and are deleted automatically. The clock starts at the first scan and a re-scan does not extend it.
 
@@ -105,8 +105,7 @@ All hashes are **64 lowercase hex characters** (SHA-256).
 | `GET` | `/health` | Liveness |
 | `POST` | `/subscribe` | Register this device on a scanned card. A code holds at most 2 devices; a third gets `409 code_in_use` |
 | `DELETE` | `/subscribe` | Erase this device (GDPR) |
-| `POST` | `/notify` | Send or schedule notifications for one or more tokens |
-| `POST` | `/schedule` | Same as notify for a single future delivery |
+| `POST` | `/notify` | Send notifications to one or more contacts, immediately |
 | `POST` | `/update-push-id` | Push token changed (reinstall / permissions) |
 
 `POST /notify` body (shape):
@@ -118,11 +117,7 @@ All hashes are **64 lowercase hex characters** (SHA-256).
   "campaign_id": "<uuid>",
   "deliveries": [
     { "et_hash": "<sha256 hex>", "encrypted_payload": "<ciphertext for this card>" },
-    {
-      "et_hash": "<sha256 hex>",
-      "encrypted_payload": "<ciphertext for this card>",
-      "scheduled_at": "2026-10-01T12:00:00+00:00"
-    }
+    { "et_hash": "<sha256 hex>", "encrypted_payload": "<ciphertext for this card>" }
   ]
 }
 ```

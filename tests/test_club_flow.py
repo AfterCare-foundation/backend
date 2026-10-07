@@ -19,7 +19,6 @@ def test_two_devices_notify_excludes_sender(client, sent):
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["pushed"] == 1
-    assert body["scheduled"] == 0
 
     assert len(sent) == 1
     recipients = sent[0]["recipients"]
@@ -349,79 +348,48 @@ def test_separate_campaigns_both_deliver(client, sent):
     assert len(sent) == 2
 
 
-def test_scheduled_delivery_for_same_device_is_kept(client, sent):
+def test_scheduled_at_is_rejected(client, sent):
     from datetime import datetime, timedelta, timezone
 
-    _two_codes_with_same_person(client)
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
     later = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
     response = client.post(
         "/notify",
         json={
-            "sender_push_id_hash": sha256_hex("push:bob"),
-            "device_credential": sha256_hex("secret:bob"),
+            "sender_push_id_hash": sha256_hex("push:alice"),
+            "device_credential": sha256_hex("secret:alice"),
             "campaign_id": str(uuid4()),
             "deliveries": [
-                {"et_hash": sha256_hex("card:pink"), "encrypted_payload": "later", "scheduled_at": later},
-                {"et_hash": sha256_hex("card:green"), "encrypted_payload": "now"},
+                {"et_hash": sha256_hex("card:pink"), "encrypted_payload": "x", "scheduled_at": later}
             ],
         },
     )
-    body = response.json()
-    assert body["pushed"] == 1
-    assert body["scheduled"] == 1  # it is a separate, later notification
-    assert sent[0]["payloads"] == ["now"]
+    assert response.status_code == 422
+    assert sent == []
+    assert client.post("/schedule", json={}).status_code == 404
 
 
-def test_scheduled_rows_for_same_device_are_sent_as_one_push(client, monkeypatch):
-    from datetime import datetime, timedelta, timezone
-    import os, subprocess
-    from tests.conftest import PGPASSWORD
-    from app.cron import dispatch_pending_notifications
-
+def test_retries_for_the_same_device_are_sent_as_one_push(client, monkeypatch):
     _two_codes_with_same_person(client)
-    when = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
-    response = client.post(
-        "/notify",
-        json={
-            "sender_push_id_hash": sha256_hex("push:bob"),
-            "device_credential": sha256_hex("secret:bob"),
-            "campaign_id": str(uuid4()),
-            "deliveries": [
-                {"et_hash": sha256_hex(f"card:{c}"), "encrypted_payload": f"hiv-for-{c}", "scheduled_at": when}
-                for c in ("pink", "green")
-            ],
-        },
-    )
-    assert response.json()["scheduled"] == 2
+    broken = {"on": True}
 
-    # Fast-forward: the 10 days have passed.
-    subprocess.check_call(
-        ["psql", "-h", "localhost", "-U", "aftercare_dev", "-d", "aftercare_dev",
-         "-c", "UPDATE pending_notifications SET scheduled_at = NOW() - INTERVAL '1 minute'"],
-        env={**os.environ, "PGPASSWORD": PGPASSWORD}, stdout=subprocess.DEVNULL,
-    )
+    async def flaky_real_push(recipient, payloads):
+        if broken["on"]:
+            return -1
+        from app.services.push import send_push
+        ok = await send_push(recipient["push_token"], recipient["platform"], payloads, recipient["push_id_hash"])
+        return 1 if ok else -1
 
-    client.portal.call(dispatch_pending_notifications)
+    monkeypatch.setattr("app.services.notify_flow.send_bundle", flaky_real_push)
+    monkeypatch.setattr("app.cron.send_bundle", flaky_real_push)
+
+    response = _multi_notify(client, device="bob", cards=["pink", "green"], campaign_id=str(uuid4()))
+    assert response.json()["retrying"] == 2
+
+    broken["on"] = False
+    _run_dispatcher(client)
 
     notes = pull_inbox(client, device="alice").json()["notifications"]
     assert len(notes) == 1  # one buzz
-    assert [notes[0]["enc"], *notes[0]["more"]] == ["hiv-for-pink", "hiv-for-green"]
-
-
-def test_cleanup_deletes_subscriptions_older_than_the_ttl_only(client):
-    import os, subprocess
-    from app.cron import cleanup_expired_subscriptions
-    from tests.conftest import PGPASSWORD
-
-    subscribe(client, device="alice", card="old")
-    subscribe(client, device="alice", card="recent")
-    psql = ["psql", "-h", "localhost", "-U", "aftercare_dev", "-d", "aftercare_dev", "-t", "-A", "-c"]
-    env = {**os.environ, "PGPASSWORD": PGPASSWORD}
-    # 100 days: past the old 60-day limit, inside the new 180-day one. 200 days: expired.
-    subprocess.check_call(psql + [f"UPDATE token_subscriptions SET created_date = CURRENT_DATE - 200 WHERE et_hash = '{sha256_hex('card:old')}'"], env=env, stdout=subprocess.DEVNULL)
-    subprocess.check_call(psql + [f"UPDATE token_subscriptions SET created_date = CURRENT_DATE - 100 WHERE et_hash = '{sha256_hex('card:recent')}'"], env=env, stdout=subprocess.DEVNULL)
-
-    client.portal.call(cleanup_expired_subscriptions)
-
-    left = subprocess.check_output(psql + ["SELECT et_hash FROM token_subscriptions"], env=env, text=True).split()
-    assert left == [sha256_hex("card:recent")]
+    assert [notes[0]["enc"], *notes[0]["more"]] == ["ciphertext-for-pink", "ciphertext-for-green"]

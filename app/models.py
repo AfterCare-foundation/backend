@@ -3,10 +3,9 @@
 # Expected shape of every API request body.
 # FastAPI rejects invalid JSON with 422 before our route code runs.
 
-from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.hashes import is_sha256_hex
 
@@ -52,6 +51,10 @@ class SubscribeRequest(BaseModel):
 
 
 class Delivery(BaseModel):
+    # Unknown fields (for example the removed scheduled_at) are rejected with 422,
+    # so a client that still tries to schedule finds out instead of being ignored.
+    model_config = ConfigDict(extra="forbid")
+
     et_hash: str
     encrypted_payload: str = Field(
         description=(
@@ -61,11 +64,6 @@ class Delivery(BaseModel):
         min_length=1,
         max_length=MAX_ENCRYPTED_PAYLOAD,
     )
-    scheduled_at: datetime | None = Field(
-        default=None,
-        description="UTC time to send. Omit for immediate delivery.",
-    )
-
     @field_validator("et_hash")
     @classmethod
     def validate_hash(cls, v: str) -> str:
@@ -73,32 +71,13 @@ class Delivery(BaseModel):
 
 
 class NotifyRequest(BaseModel):
-    """One 'Notify contacts' tap. Repeat with the same campaign_id for extra tokens."""
+    """One 'Notify contacts' tap, sent in one request with a fresh campaign_id."""
     sender_push_id_hash: str
     device_credential: str
     campaign_id: UUID
     deliveries: list[Delivery] = Field(min_length=1, max_length=100)
 
     @field_validator("sender_push_id_hash")
-    @classmethod
-    def validate_hash(cls, v: str) -> str:
-        return require_hash(v)
-
-    @field_validator("device_credential")
-    @classmethod
-    def validate_credential(cls, v: str) -> str:
-        return require_credential(v)
-
-
-class ScheduleRequest(BaseModel):
-    et_hash: str
-    sender_push_id_hash: str
-    device_credential: str
-    campaign_id: UUID
-    encrypted_payload: str = Field(min_length=1, max_length=MAX_ENCRYPTED_PAYLOAD)
-    scheduled_at: datetime
-
-    @field_validator("et_hash", "sender_push_id_hash")
     @classmethod
     def validate_hash(cls, v: str) -> str:
         return require_hash(v)

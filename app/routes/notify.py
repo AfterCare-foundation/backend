@@ -13,7 +13,7 @@ router = APIRouter()
 @router.post("/notify")
 async def notify(body: NotifyRequest, conn: asyncpg.Connection = Depends(get_db)):
     """
-    Send or schedule notifications for one or more tokens.
+    Send notifications for one or more tokens, immediately.
 
     The sender must already be subscribed to each token.
     Rate limit applies per campaign_id, not per HTTP call.

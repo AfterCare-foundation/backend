@@ -18,7 +18,7 @@ Hex means **lowercase**, no `0x`, no colons.
 | `push_token` | The real APNs/FCM token string (needed to deliver). |
 | `device_credential` | 32 random bytes as 64 hex. Create once, store in Keychain / Keystore. Send the hex secret; the server stores `SHA-256(those 32 bytes)`. |
 | `platform` | `ios` or `android` |
-| `campaign_id` | New UUID per tap of Notify, sent in ONE request. An id can be used once (`409 campaign_already_used` if repeated). Never retry a failed push yourself: the server retries failed pushes for up to a day (`retrying` in the response says how many). If `pushed` and `scheduled` and `retrying` are all 0 (nobody else on the codes yet), the same id may be reused. |
+| `campaign_id` | New UUID per tap of Notify, sent in ONE request. An id can be used once (`409 campaign_already_used` if repeated). Never retry a failed push yourself: the server retries failed pushes for up to a day (`retrying` in the response says how many). If `pushed` and `retrying` are both 0 (nobody else on the codes yet), the same id may be reused. |
 | `encrypted_payload` | Per card. See §2. |
 
 Do not send the raw `TOKEN` to the server.
@@ -73,11 +73,10 @@ and show each STI once. Android delivers `more` as a JSON-encoded string.
   "deliveries": [
     {
       "et_hash": "<sha256 of this card's TOKEN>",
-      "encrypted_payload": "<base64 nonce||ciphertext||tag>",
-      "scheduled_at": null
+      "encrypted_payload": "<base64 nonce||ciphertext||tag>"
     }
   ]
 }
 ```
 
-The app sends immediately and does not schedule: it never sets `scheduled_at` and never calls `/schedule`. When a test is reliable again is a clinical question that the recipient's clinic answers, so the server has no timing logic. `scheduled_at` stays an optional field for now; if present it must be UTC with a timezone offset.
+Every notification is sent immediately. There is no scheduling: when a test is reliable again is a clinical question that the recipient's clinic answers, so the server has no timing logic. A delivery with a `scheduled_at` (or any other unknown field) is rejected with `422`. Response: `{"status": "ok", "pushed": n, "retrying": n, "contacts": n}`.

@@ -181,7 +181,7 @@ async def send_bundle(recipient: dict, encrypted_payloads: list[str]) -> int:
 
 
 async def send_push_to_all(recipients: list[dict], encrypted_payload: str) -> int:
-    """Same ciphertext to every recipient (scheduled dispatch). Returns pushes accepted."""
+    """Same ciphertext to every recipient (retry dispatch). Returns pushes accepted."""
     accepted = 0
     for recipient in recipients:
         if await send_push(

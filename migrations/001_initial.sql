@@ -9,7 +9,7 @@
 --   - Raw tokens and raw push IDs never stored — only their SHA-256 hashes
 --   - push_token is the one exception: stored in plaintext because APNs/FCM
 --     require the real token to deliver pushes. It is never logged.
---   - STI type is never stored. Scheduled rows keep only client-encrypted bytes
+--   - STI type is never stored. Queued rows (failed pushes waiting for retry) keep only client-encrypted bytes
 --     until dispatch, then the row is deleted.
 --   - All subscription data expires after SUBSCRIPTION_TTL_DAYS (see app/config.py)
 

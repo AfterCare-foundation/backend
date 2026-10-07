@@ -1,14 +1,12 @@
 # app/services/notify_flow.py
 #
-# Shared notify / schedule logic.
+# Notify logic: every notification is sent immediately.
 #
 # Each delivery carries its own encrypted_payload, produced on the phone:
 #   key = derived from THAT card's raw token (both halves share it)
 #   payload = encrypt(STI type) with that key
 # Different cards have different tokens, so ciphertext cannot be reused
 # across deliveries. The server never has the raw token and never decrypts.
-
-from datetime import datetime, timezone, timedelta
 
 from fastapi import HTTPException
 import asyncpg
@@ -17,9 +15,6 @@ from app.config import settings
 from app.services.devices import verify_device
 from app.services.push import send_bundle
 from app.services.rate_limit import claim_campaign, release_campaign
-
-MAX_SCHEDULE_DAYS = 60
-
 
 async def sender_is_subscribed(conn: asyncpg.Connection, et_hash: str, sender_push_id_hash: str) -> bool:
     row = await conn.fetchval(
@@ -50,25 +45,12 @@ async def run_deliveries(
             detail=f"A campaign can notify at most {settings.notify_max_contacts_per_campaign} contacts",
         )
 
-    now = datetime.now(timezone.utc)
-
     # Step 1: validate EVERY item before sending anything.
     # A bad item rejects the whole request and nothing goes out.
     todo = []
     for item in deliveries:
         if not await sender_is_subscribed(conn, item.et_hash, sender_push_id_hash):
             raise HTTPException(status_code=403, detail="Not a subscriber of this connection")
-
-        if item.scheduled_at is not None:
-            if item.scheduled_at.tzinfo is None:
-                raise HTTPException(status_code=400, detail="scheduled_at must include a timezone (UTC)")
-            if item.scheduled_at <= now:
-                raise HTTPException(status_code=400, detail="scheduled_at must be in the future")
-            if item.scheduled_at > now + timedelta(days=MAX_SCHEDULE_DAYS):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"scheduled_at must be within {MAX_SCHEDULE_DAYS} days from now",
-                )
         todo.append(item)
 
     # A campaign_id works once: this also stops a resent request from
@@ -93,11 +75,9 @@ async def run_deliveries(
             sender_push_id_hash,
         ))
 
-    # Immediate deliveries grouped by recipient device, in request order.
+    # Deliveries grouped by recipient device, in request order.
     per_device: dict[str, dict] = {}
     for i, item in enumerate(todo):
-        if item.scheduled_at is not None:
-            continue
         for r in recipients_of[i]:
             entry = per_device.setdefault(r["push_id_hash"], {"recipient": dict(r), "payloads": []})
             entry["payloads"].append(item.encrypted_payload)
@@ -107,7 +87,6 @@ async def run_deliveries(
     # 15-minute dispatcher retries it and gives up after a day. The app never
     # has to retry, and the campaign is used up exactly once.
     pushed = 0
-    scheduled = 0
     handled = 0
     retrying = 0
 
@@ -118,40 +97,23 @@ async def run_deliveries(
         pushed += max(count, 0)
 
     for i, item in enumerate(todo):
-        if item.scheduled_at is not None:
+        if not recipients_of[i]:
+            continue  # nobody else on this code yet
+        if not all(device_ok[r["push_id_hash"]] for r in recipients_of[i]):
             await conn.execute(
                 """
                 INSERT INTO pending_notifications
                     (et_hash, sender_push_id_hash, encrypted_payload, scheduled_at)
-                VALUES ($1, $2, $3, $4)
+                VALUES ($1, $2, $3, NOW())
                 """,
                 item.et_hash,
                 sender_push_id_hash,
                 item.encrypted_payload,
-                item.scheduled_at,
             )
-            scheduled += 1
-        else:
-            if not recipients_of[i]:
-                continue  # nobody else on this code yet
-            if not all(device_ok[r["push_id_hash"]] for r in recipients_of[i]):
-                await conn.execute(
-                    """
-                    INSERT INTO pending_notifications
-                        (et_hash, sender_push_id_hash, encrypted_payload, scheduled_at)
-                    VALUES ($1, $2, $3, NOW())
-                    """,
-                    item.et_hash,
-                    sender_push_id_hash,
-                    item.encrypted_payload,
-                )
-                retrying += 1
-                handled += 1
-                continue
-
+            retrying += 1
         handled += 1
 
-    if pushed == 0 and scheduled == 0 and retrying == 0:
+    if pushed == 0 and retrying == 0:
         # Nothing went out (nobody on the codes yet):
         # do not use up a slot, and let the app retry with the same id.
         await release_campaign(conn, campaign_id)
@@ -159,7 +121,6 @@ async def run_deliveries(
     return {
         "status": "ok",
         "pushed": pushed,
-        "scheduled": scheduled,
         "retrying": retrying,  # pushes that failed and the server will retry itself
         "contacts": handled,
     }

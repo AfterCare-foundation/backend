@@ -40,7 +40,7 @@ async def dispatch_pending_notifications():
             logger.info("Dispatching %s pending notification(s)", len(rows))
 
             # Group by recipient device: if several due rows reach the same
-            # device (e.g. two codes with the same person, one STI scheduled
+            # device (e.g. two codes with the same person, two failed pushes
             # for both), send ONE push carrying all ciphertexts.
             recipients_of = {}
             per_device = {}

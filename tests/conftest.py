@@ -76,13 +76,11 @@ def subscribe(client, *, device: str, card: str, platform: str = "ios"):
     return body
 
 
-def notify(client, *, device: str, card: str, campaign_id: str | None = None, scheduled_at: str | None = None):
+def notify(client, *, device: str, card: str, campaign_id: str | None = None):
     delivery = {
         "et_hash": sha256_hex(f"card:{card}"),
         "encrypted_payload": f"ciphertext-for-{card}",
     }
-    if scheduled_at:
-        delivery["scheduled_at"] = scheduled_at
     body = {
         "sender_push_id_hash": sha256_hex(f"push:{device}"),
         "device_credential": sha256_hex(f"secret:{device}"),

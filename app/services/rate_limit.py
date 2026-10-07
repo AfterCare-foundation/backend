@@ -74,5 +74,5 @@ async def claim_campaign(conn: asyncpg.Connection, push_id_hash: str, campaign_i
 
 
 async def release_campaign(conn: asyncpg.Connection, campaign_id: UUID) -> None:
-    """Nothing was sent or scheduled: give the slot (and the id) back."""
+    """Nothing was sent or queued: give the slot (and the id) back."""
     await conn.execute("DELETE FROM notification_campaigns WHERE campaign_id = $1", campaign_id)
