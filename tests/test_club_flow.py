@@ -458,3 +458,24 @@ def test_cleanup_removes_long_dead_subscriptions_and_frees_the_slot(client):
     assert cara in left               # dead 3 days: still within the grace period
 
     subscribe(client, device="dan", card="pink")  # the freed slot can be used
+
+
+def test_a_device_can_add_at_most_30_new_connections_per_day(client):
+    for i in range(30):
+        subscribe(client, device="busy", card=f"card-{i}")
+
+    over = client.post(
+        "/subscribe",
+        json={
+            "et_hash": sha256_hex("card:card-30"),
+            "push_id_hash": sha256_hex("push:busy"),
+            "push_token": "push-token-busy",
+            "platform": "ios",
+            "device_credential": sha256_hex("secret:busy"),
+        },
+    )
+    assert over.status_code == 429
+    assert over.json()["detail"] == "At most 30 new connections per day"
+
+    subscribe(client, device="busy", card="card-0")   # re-scanning a code it already has is fine
+    subscribe(client, device="other", card="card-30")  # other devices are unaffected

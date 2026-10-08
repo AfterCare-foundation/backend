@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 import asyncpg
 
+from app.config import settings
 from app.database import get_db
 from app.models import SubscribeRequest, DeleteSubscriptionRequest
 from app.services.devices import register_or_verify_device, verify_device
@@ -21,7 +22,9 @@ async def subscribe(body: SubscribeRequest, conn: asyncpg.Connection = Depends(g
     Re-scanning the same card updates the push token but does not extend TTL.
 
     One code = one connection between two phones. A third device is rejected
-    with 409 "code_in_use".
+    with 409 "code_in_use". A device can add at most MAX_SUBSCRIPTIONS_PER_DAY new
+    codes per (UTC) day, which stops someone registering a whole bowl of
+    photographed cards (429).
     """
     await register_or_verify_device(conn, body.push_id_hash, body.device_credential)
 
@@ -45,6 +48,27 @@ async def subscribe(body: SubscribeRequest, conn: asyncpg.Connection = Depends(g
         )
         if others >= MAX_DEVICES_PER_CODE:
             raise HTTPException(status_code=409, detail="code_in_use")
+
+        already_on_code = await conn.fetchval(
+            "SELECT 1 FROM token_subscriptions WHERE et_hash = $1 AND push_id_hash = $2",
+            body.et_hash,
+            body.push_id_hash,
+        )
+        if not already_on_code:
+            # created_date is a date, so the limit counts per UTC day. Nothing
+            # extra is stored for it.
+            added_today = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM token_subscriptions
+                WHERE push_id_hash = $1 AND created_date = CURRENT_DATE
+                """,
+                body.push_id_hash,
+            )
+            if added_today >= settings.max_subscriptions_per_day:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"At most {settings.max_subscriptions_per_day} new connections per day",
+                )
 
         await conn.execute(
             """

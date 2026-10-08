@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # after this many days, unless the app fixes the token first.
     dead_token_grace_days: int = 14
 
+    # New connections (card scans) one device may add per UTC day.
+    max_subscriptions_per_day: int = 30
+
     notify_rate_limit_days: int = 30
     notify_max_campaigns: int = 6
     notify_max_campaigns_per_day: int = 3  # rolling 24 hours

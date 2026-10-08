@@ -101,6 +101,7 @@ See `.env.example`. Important flags:
 | `PUSH_STUB_MODE` | `true` logs pushes instead of calling Apple/Google. |
 | `RUN_BACKGROUND_JOBS` | Dispatcher + daily cleanup (subscriptions older than `SUBSCRIPTION_TTL_DAYS`) in this process. |
 | `SUBSCRIPTION_TTL_DAYS` | Days a card scan is kept (default 180). |
+| `MAX_SUBSCRIPTIONS_PER_DAY` | New connections one device may add per UTC day (default 30). |
 | `DEAD_TOKEN_GRACE_DAYS` | Days a subscription with a dead push token is kept (default 14). |
 | `NOTIFY_MAX_CAMPAIGNS_PER_DAY` | Campaigns per rolling 24 hours (default 3). |
 | `NOTIFY_MAX_CAMPAIGNS`, `NOTIFY_RATE_LIMIT_DAYS` | Campaigns per rolling window (default 6 per 30 days). |
@@ -124,7 +125,7 @@ All hashes are **64 lowercase hex characters** (SHA-256).
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health` | Liveness |
-| `POST` | `/subscribe` | Register this device on a scanned card. A code holds at most 2 devices; a third gets `409 code_in_use` |
+| `POST` | `/subscribe` | Register this device on a scanned card. A code holds at most 2 devices; a third gets `409 code_in_use`. A device can add at most 30 new codes per UTC day, then `429` |
 | `DELETE` | `/subscribe` | Erase this device (GDPR) |
 | `POST` | `/notify` | Send notifications to one or more contacts, immediately |
 | `POST` | `/update-push-id` | Push token changed (reinstall / permissions): moves the device's subscriptions to the new ID, keeping their expiry. Call it before `/subscribe` after a reinstall |
