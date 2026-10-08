@@ -44,11 +44,12 @@ async def dispatch_pending_notifications():
             # device (e.g. two codes with the same person, two failed pushes
             # for both), send ONE push carrying all ciphertexts.
             recipients_of = {}
+            has_dead = {}
             per_device = {}
             for row in rows:
                 recipients = await conn.fetch(
                     """
-                    SELECT push_id_hash, push_token, platform
+                    SELECT push_id_hash, push_token, platform, dead_since
                     FROM token_subscriptions
                     WHERE et_hash = $1
                       AND push_id_hash != $2
@@ -57,7 +58,12 @@ async def dispatch_pending_notifications():
                     row["sender_push_id_hash"],
                 )
                 recipients_of[row["id"]] = [r["push_id_hash"] for r in recipients]
+                has_dead[row["id"]] = any(r["dead_since"] is not None for r in recipients)
                 for r in recipients:
+                    if r["dead_since"] is not None:
+                        # The provider already said this token is dead: do not
+                        # call it again. Wait for the app to send a new token.
+                        continue
                     entry = per_device.setdefault(
                         r["push_id_hash"], {"recipient": dict(r), "payloads": []}
                     )
@@ -71,10 +77,14 @@ async def dispatch_pending_notifications():
                 device_ok[device] = count >= 0
 
             for row in rows:
-                # Failed? Keep the row and retry on the next run,
-                # but give up after a day so dead tokens do not pile up.
-                too_old = row["scheduled_at"] < datetime.now(timezone.utc) - timedelta(days=1)
-                all_ok = all(device_ok[d] for d in recipients_of[row["id"]])
+                # Two kinds of waiting:
+                # - ordinary failure: retry every run, give up after a day;
+                # - dead token: no calls, but keep the message for the dead-token
+                #   grace period, so it is delivered if the app sends a new token.
+                keep_days = settings.dead_token_grace_days if has_dead[row["id"]] else 1
+                too_old = row["scheduled_at"] < datetime.now(timezone.utc) - timedelta(days=keep_days)
+                # device_ok has no entry for skipped (dead) devices: they count as not delivered.
+                all_ok = all(device_ok.get(d, False) for d in recipients_of[row["id"]])
                 if not all_ok and not too_old:
                     continue
                 await conn.execute(

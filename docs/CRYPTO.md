@@ -18,7 +18,7 @@ Hex means **lowercase**, no `0x`, no colons.
 | `push_token` | The real APNs/FCM token string (needed to deliver). |
 | `device_credential` | 32 random bytes as 64 hex. Create once, store in Keychain / Keystore. Send the hex secret; the server stores `SHA-256(those 32 bytes)`. |
 | `platform` | `ios` or `android` |
-| `campaign_id` | New UUID per tap of Notify, sent in ONE request. An id can be used once (`409 campaign_already_used` if repeated). Never retry a failed push yourself: the server retries failed pushes for up to a day (`retrying` in the response says how many). If `pushed` and `retrying` are both 0 (nobody else on the codes yet), the same id may be reused. |
+| `campaign_id` | New UUID per tap of Notify, sent in ONE request. An id can be used once (`409 campaign_already_used` if repeated). Never retry a failed push yourself: the server retries failed pushes for up to a day, and keeps a message for a recipient whose push token is dead for up to 30 days, delivering it once the app sends a new token (`retrying` in the response says how many). If `pushed` and `retrying` are both 0 (nobody else on the codes yet), the same id may be reused. |
 | `encrypted_payload` | Per card. See §2. |
 
 Do not send the raw `TOKEN` to the server.

@@ -479,3 +479,65 @@ def test_a_device_can_add_at_most_30_new_connections_per_day(client):
 
     subscribe(client, device="busy", card="card-0")   # re-scanning a code it already has is fine
     subscribe(client, device="other", card="card-30")  # other devices are unaffected
+
+
+def _dead_recipient_with_waiting_message(client, monkeypatch):
+    """Bob's token is dead; Alice's message to him is waiting in the queue."""
+    from app.services.push import BUNDLE_DEAD_TOKEN
+
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+
+    async def dead(recipient, payloads):
+        return BUNDLE_DEAD_TOKEN
+
+    monkeypatch.setattr("app.services.notify_flow.send_bundle", dead)
+    response, _ = notify(client, device="alice", card="pink")
+    assert response.json()["retrying"] == 1
+
+
+def test_dispatcher_does_not_call_a_dead_token_but_keeps_the_message(client, monkeypatch):
+    _dead_recipient_with_waiting_message(client, monkeypatch)
+
+    calls = []
+
+    async def spy(recipient, payloads):
+        calls.append(recipient["push_id_hash"])
+        return 1
+
+    monkeypatch.setattr("app.cron.send_bundle", spy)
+    _run_dispatcher(client)
+
+    assert calls == []
+    assert _sql("SELECT COUNT(*) FROM pending_notifications") == "1"
+
+
+def test_waiting_message_is_delivered_after_the_app_sends_a_fresh_token(client, monkeypatch):
+    _dead_recipient_with_waiting_message(client, monkeypatch)
+    _sql("UPDATE pending_notifications SET scheduled_at = NOW() - INTERVAL '10 days'")
+
+    subscribe(client, device="bob", card="pink")  # fresh token clears the dead mark
+
+    calls = []
+
+    async def spy(recipient, payloads):
+        calls.append(recipient["push_id_hash"])
+        return 1
+
+    monkeypatch.setattr("app.cron.send_bundle", spy)
+    _run_dispatcher(client)
+
+    assert calls == [sha256_hex("push:bob")]
+    assert _sql("SELECT COUNT(*) FROM pending_notifications") == "0"
+
+
+def test_message_for_a_dead_token_is_dropped_after_the_grace_period(client, monkeypatch):
+    _dead_recipient_with_waiting_message(client, monkeypatch)
+
+    _sql("UPDATE pending_notifications SET scheduled_at = NOW() - INTERVAL '5 days'")
+    _run_dispatcher(client)
+    assert _sql("SELECT COUNT(*) FROM pending_notifications") == "1"  # a normal failure would be gone after 1 day
+
+    _sql("UPDATE pending_notifications SET scheduled_at = NOW() - INTERVAL '31 days'")
+    _run_dispatcher(client)
+    assert _sql("SELECT COUNT(*) FROM pending_notifications") == "0"

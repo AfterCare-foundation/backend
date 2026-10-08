@@ -21,7 +21,7 @@ Sauna wristband pairing, CAPTCHA, and anomaly detection are not in this codebase
 | Hashed push ID + the real push token (Apple/Google need it to deliver) | IP addresses |
 | UTC **date** a card was scanned (`created_date`) | Encounter time |
 | Per Notify tap: `campaign_id`, sender device hash and the exact time, for rate limits (30 days) | Which contacts a campaign reached |
-| Encrypted bytes of a push that failed, with the card hash and sender, until the retry succeeds (at most a day) | Plaintext STI type |
+| Encrypted bytes of a push that failed, with the card hash and sender, until the retry succeeds (at most a day; up to 30 days if the recipient's push token is dead) | Plaintext STI type |
 
 A subscription whose push token Apple or Google report as dead (app uninstalled, token replaced) is marked, and deleted after **30 days**, so a phone restored from a backup has time to send its new token, (`DEAD_TOKEN_GRACE_DAYS`) unless the app sends a fresh token first (`/update-push-id` or a re-scan). This also frees the slot on that code.
 
@@ -39,7 +39,7 @@ Each card has its own token, so the app encrypts the STI type **once per contact
 2. Later, one person taps Notify → `POST /notify` (must already be subscribed to that token).
 3. The sender is excluded from the recipient list.
 4. Every notification is sent **immediately** to APNs/FCM (or to the dev inbox in stub mode). There is no scheduling.
-5. If a push fails, the server queues it in `pending_notifications` and the background job retries it every 15 minutes for up to a day. The app never retries.
+5. If a push fails, the server queues it in `pending_notifications` and the background job retries it every 15 minutes for up to a day. If the provider reports the recipient's token as dead, the server stops calling it but keeps the message for the dead-token period (30 days) and delivers it if the app sends a fresh token. The app never retries.
 
 ### Notify rules
 
