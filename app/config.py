@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # A subscription whose push token the provider reports as dead is removed
     # after this many days, unless the app fixes the token first.
-    dead_token_grace_days: int = 14
+    dead_token_grace_days: int = 30
 
     # New connections (card scans) one device may add per UTC day.
     max_subscriptions_per_day: int = 30

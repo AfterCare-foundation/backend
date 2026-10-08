@@ -448,13 +448,13 @@ def test_cleanup_removes_long_dead_subscriptions_and_frees_the_slot(client):
     subscribe(client, device="bob", card="pink")
     subscribe(client, device="cara", card="green")
     bob, cara = sha256_hex("push:bob"), sha256_hex("push:cara")
-    _sql(f"UPDATE token_subscriptions SET dead_since = CURRENT_DATE - 30 WHERE push_id_hash = '{bob}'")
+    _sql(f"UPDATE token_subscriptions SET dead_since = CURRENT_DATE - 40 WHERE push_id_hash = '{bob}'")
     _sql(f"UPDATE token_subscriptions SET dead_since = CURRENT_DATE - 3 WHERE push_id_hash = '{cara}'")
 
     client.portal.call(cleanup_expired_subscriptions)
 
     left = set(_sql("SELECT push_id_hash FROM token_subscriptions").split())
-    assert bob not in left            # dead 30 days: gone
+    assert bob not in left            # dead 40 days: gone
     assert cara in left               # dead 3 days: still within the grace period
 
     subscribe(client, device="dan", card="pink")  # the freed slot can be used
