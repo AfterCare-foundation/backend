@@ -6,6 +6,8 @@ This repo is the **notification server** (Python / FastAPI / PostgreSQL). It is 
 
 **Status:** club (paper card) flow only. In development. Not production-ready.
 
+Found a security problem? See [SECURITY.md](SECURITY.md).
+
 Sauna wristband pairing, CAPTCHA, and anomaly detection are not in this codebase yet.
 
 ---
@@ -18,9 +20,10 @@ Sauna wristband pairing, CAPTCHA, and anomaly detection are not in this codebase
 | `SHA-256` of the device credential | Names, email, phone, location |
 | Hashed push ID + the real push token (Apple/Google need it to deliver) | IP addresses |
 | UTC **date** a card was scanned (`created_date`) | Encounter time |
-| Encrypted bytes of a push that failed, until the retry succeeds (at most a day) | Plaintext STI type |
+| Per Notify tap: `campaign_id`, sender device hash and the exact time, for rate limits (30 days) | Which contacts a campaign reached |
+| Encrypted bytes of a push that failed, with the card hash and sender, until the retry succeeds (at most a day) | Plaintext STI type |
 
-Subscriptions expire after **180 days** (`SUBSCRIPTION_TTL_DAYS`) and are deleted automatically. The clock starts at the first scan and a re-scan does not extend it.
+Subscriptions expire after **180 days** (`SUBSCRIPTION_TTL_DAYS`) and are deleted automatically. The clock starts at the first scan and a re-scan does not extend it. The value is a single setting, so it is easy to change; a change applies to existing rows too, because expiry is `created_date` plus this number.
 
 The infection name (gonorrhoea, syphilis, HIV, Mpox, HPV, …) is chosen in the **app** at notify time. The card is not tied to an STI. The phone should encrypt that choice; the lock-screen text is always generic: *You have a new message. Open the app to read it.*
 
@@ -33,7 +36,15 @@ Each card has its own token, so the app encrypts the STI type **once per contact
 1. Both people scan their half → `POST /subscribe` (same token hash on both phones).
 2. Later, one person taps Notify → `POST /notify` (must already be subscribed to that token).
 3. The sender is excluded from the recipient list.
-4. Immediate sends go to APNs/FCM (or the console in stub mode). Future sends sit in `pending_notifications` until a background job runs (every 15 minutes).
+4. Every notification is sent **immediately** to APNs/FCM (or to the dev inbox in stub mode). There is no scheduling.
+5. If a push fails, the server queues it in `pending_notifications` and the background job retries it every 15 minutes for up to a day. The app never retries.
+
+### Notify rules
+
+- The whole request is validated first. One bad item (for example a code the sender is not subscribed to) rejects everything and nothing is sent.
+- One person reached through several of the sender's codes gets **one** push. `enc` holds the first ciphertext and `more` the rest; the app decrypts all and shows each STI once. The server never drops a delivery, because it cannot see the STI type.
+- A code connects at most **2 devices**, once. A third device is refused at subscribe time.
+- Response: `{"status": "ok", "pushed": n, "retrying": n, "contacts": n}`.
 
 ### Notify limits (per device)
 
@@ -87,7 +98,14 @@ See `.env.example`. Important flags:
 | `ENVIRONMENT` | `development` enables `/docs`. Use `production` on the host. |
 | `PUSH_STUB_MODE` | `true` logs pushes instead of calling Apple/Google. |
 | `RUN_BACKGROUND_JOBS` | Dispatcher + daily cleanup (subscriptions older than `SUBSCRIPTION_TTL_DAYS`) in this process. |
-| `NOTIFY_*` | Campaign and contact caps (see above). |
+| `SUBSCRIPTION_TTL_DAYS` | Days a card scan is kept (default 180). |
+| `NOTIFY_MAX_CAMPAIGNS_PER_DAY` | Campaigns per rolling 24 hours (default 3). |
+| `NOTIFY_MAX_CAMPAIGNS`, `NOTIFY_RATE_LIMIT_DAYS` | Campaigns per rolling window (default 6 per 30 days). |
+| `NOTIFY_MAX_CONTACTS_PER_CAMPAIGN` | Contacts per Notify tap (default 100). |
+
+### Test instance on Scalingo
+
+Procfile and `.python-version` are all it needs. Set `ENVIRONMENT=development`, `PUSH_STUB_MODE=true`, `RUN_BACKGROUND_JOBS=true` and `WEB_CONCURRENCY=1` (the dev inbox lives in memory, so run **one** process and one instance), add the PostgreSQL add-on, and apply every file in `migrations/` in order. Deploy new code **before** a migration that drops something the old code still reads. `/docs` and `/dev/inbox` are open in this mode, so use it for test data only.
 
 Production must use **HTTPS**. The device credential is sent on each mutating request; it is a bearer secret.
 
@@ -106,7 +124,7 @@ All hashes are **64 lowercase hex characters** (SHA-256).
 | `POST` | `/subscribe` | Register this device on a scanned card. A code holds at most 2 devices; a third gets `409 code_in_use` |
 | `DELETE` | `/subscribe` | Erase this device (GDPR) |
 | `POST` | `/notify` | Send notifications to one or more contacts, immediately |
-| `POST` | `/update-push-id` | Push token changed (reinstall / permissions) |
+| `POST` | `/update-push-id` | Push token changed (reinstall / permissions): moves the device's subscriptions to the new ID, keeping their expiry. Call it before `/subscribe` after a reinstall |
 
 `POST /notify` body (shape):
 
@@ -132,8 +150,10 @@ All hashes are **64 lowercase hex characters** (SHA-256).
 app/main.py              FastAPI app, logging, no access log
 app/routes/              HTTP handlers
 app/services/            Device proof, rate limits, notify flow, push (stub/APNs/FCM)
-app/cron.py              Pending dispatch + TTL cleanup
-migrations/001_initial.sql
+app/cron.py              Retry queue dispatch + daily cleanup
+migrations/                SQL, applied in order (001 schema, 002 drops campaign_contacts)
+docs/CRYPTO.md           What the app must do so both sides agree (hashing, encryption)
+pyproject.toml, uv.lock  Dependencies (ranges) and the exact pinned versions
 ```
 
 `app/services/captcha.py` is unused. It is reserved for later, risk-based checks only.
