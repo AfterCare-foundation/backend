@@ -13,8 +13,9 @@ import asyncpg
 
 from app.config import settings
 from app.services.devices import verify_device
-from app.services.push import send_bundle
+from app.services.push import BUNDLE_DEAD_TOKEN, send_bundle
 from app.services.rate_limit import claim_campaign, release_campaign
+from app.services.tokens import mark_dead
 
 async def sender_is_subscribed(conn: asyncpg.Connection, et_hash: str, sender_push_id_hash: str) -> bool:
     row = await conn.fetchval(
@@ -93,6 +94,8 @@ async def run_deliveries(
     device_ok: dict[str, bool] = {}
     for device, entry in per_device.items():
         count = await send_bundle(entry["recipient"], entry["payloads"])
+        if count == BUNDLE_DEAD_TOKEN:
+            await mark_dead(conn, device, entry["recipient"]["push_token"])
         device_ok[device] = count >= 0
         pushed += max(count, 0)
 

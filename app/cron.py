@@ -9,7 +9,8 @@ from datetime import datetime, timedelta, timezone
 
 import app.database as database
 from app.config import settings
-from app.services.push import send_bundle
+from app.services.push import BUNDLE_DEAD_TOKEN, send_bundle
+from app.services.tokens import mark_dead
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,10 @@ async def dispatch_pending_notifications():
 
             device_ok = {}
             for device, entry in per_device.items():
-                device_ok[device] = await send_bundle(entry["recipient"], entry["payloads"]) >= 0
+                count = await send_bundle(entry["recipient"], entry["payloads"])
+                if count == BUNDLE_DEAD_TOKEN:
+                    await mark_dead(conn, device, entry["recipient"]["push_token"])
+                device_ok[device] = count >= 0
 
             for row in rows:
                 # Failed? Keep the row and retry on the next run,
@@ -95,6 +99,16 @@ async def cleanup_expired_subscriptions():
             deleted = result.split()[-1]
             if int(deleted) > 0:
                 logger.info("TTL cleanup: deleted %s expired subscription(s)", deleted)
+
+            # Tokens the provider reported dead and the app never fixed.
+            dead_cutoff = datetime.now(timezone.utc).date() - timedelta(days=settings.dead_token_grace_days)
+            result = await conn.execute(
+                "DELETE FROM token_subscriptions WHERE dead_since IS NOT NULL AND dead_since < $1",
+                dead_cutoff,
+            )
+            dead_deleted = result.split()[-1]
+            if int(dead_deleted) > 0:
+                logger.info("Dead-token cleanup: deleted %s subscription(s)", dead_deleted)
 
             await conn.execute(
                 """

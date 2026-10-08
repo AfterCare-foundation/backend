@@ -377,9 +377,9 @@ def test_retries_for_the_same_device_are_sent_as_one_push(client, monkeypatch):
     async def flaky_real_push(recipient, payloads):
         if broken["on"]:
             return -1
-        from app.services.push import send_push
-        ok = await send_push(recipient["push_token"], recipient["platform"], payloads, recipient["push_id_hash"])
-        return 1 if ok else -1
+        from app.services.push import PUSH_OK, send_push
+        result = await send_push(recipient["push_token"], recipient["platform"], payloads, recipient["push_id_hash"])
+        return 1 if result == PUSH_OK else -1
 
     monkeypatch.setattr("app.services.notify_flow.send_bundle", flaky_real_push)
     monkeypatch.setattr("app.cron.send_bundle", flaky_real_push)
@@ -393,3 +393,68 @@ def test_retries_for_the_same_device_are_sent_as_one_push(client, monkeypatch):
     notes = pull_inbox(client, device="alice").json()["notifications"]
     assert len(notes) == 1  # one buzz
     assert [notes[0]["enc"], *notes[0]["more"]] == ["ciphertext-for-pink", "ciphertext-for-green"]
+
+
+def _sql(statement: str) -> str:
+    import os, subprocess
+    from tests.conftest import PGPASSWORD
+
+    return subprocess.check_output(
+        ["psql", "-h", "localhost", "-U", "aftercare_dev", "-d", "aftercare_dev", "-t", "-A", "-c", statement],
+        env={**os.environ, "PGPASSWORD": PGPASSWORD}, text=True,
+    ).strip()
+
+
+def test_dead_token_is_marked_and_the_push_is_still_retried(client, monkeypatch):
+    from app.services.push import BUNDLE_DEAD_TOKEN
+
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+
+    async def dead(recipient, payloads):
+        return BUNDLE_DEAD_TOKEN
+
+    monkeypatch.setattr("app.services.notify_flow.send_bundle", dead)
+    response, _ = notify(client, device="alice", card="pink")
+    assert response.json()["retrying"] == 1  # the app may fix its token, so we retry
+
+    bob = sha256_hex("push:bob")
+    assert _sql(f"SELECT dead_since IS NOT NULL FROM token_subscriptions WHERE push_id_hash = '{bob}'") == "t"
+    alice = sha256_hex("push:alice")
+    assert _sql(f"SELECT dead_since IS NOT NULL FROM token_subscriptions WHERE push_id_hash = '{alice}'") == "f"
+
+
+def test_rescan_clears_the_dead_mark(client, monkeypatch):
+    from app.services.push import BUNDLE_DEAD_TOKEN
+
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+
+    async def dead(recipient, payloads):
+        return BUNDLE_DEAD_TOKEN
+
+    monkeypatch.setattr("app.services.notify_flow.send_bundle", dead)
+    notify(client, device="alice", card="pink")
+
+    subscribe(client, device="bob", card="pink")  # the app came back with a fresh token
+    bob = sha256_hex("push:bob")
+    assert _sql(f"SELECT dead_since IS NULL FROM token_subscriptions WHERE push_id_hash = '{bob}'") == "t"
+
+
+def test_cleanup_removes_long_dead_subscriptions_and_frees_the_slot(client):
+    from app.cron import cleanup_expired_subscriptions
+
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+    subscribe(client, device="cara", card="green")
+    bob, cara = sha256_hex("push:bob"), sha256_hex("push:cara")
+    _sql(f"UPDATE token_subscriptions SET dead_since = CURRENT_DATE - 30 WHERE push_id_hash = '{bob}'")
+    _sql(f"UPDATE token_subscriptions SET dead_since = CURRENT_DATE - 3 WHERE push_id_hash = '{cara}'")
+
+    client.portal.call(cleanup_expired_subscriptions)
+
+    left = set(_sql("SELECT push_id_hash FROM token_subscriptions").split())
+    assert bob not in left            # dead 30 days: gone
+    assert cara in left               # dead 3 days: still within the grace period
+
+    subscribe(client, device="dan", card="pink")  # the freed slot can be used

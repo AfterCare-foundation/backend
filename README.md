@@ -23,6 +23,8 @@ Sauna wristband pairing, CAPTCHA, and anomaly detection are not in this codebase
 | Per Notify tap: `campaign_id`, sender device hash and the exact time, for rate limits (30 days) | Which contacts a campaign reached |
 | Encrypted bytes of a push that failed, with the card hash and sender, until the retry succeeds (at most a day) | Plaintext STI type |
 
+A subscription whose push token Apple or Google report as dead (app uninstalled, token replaced) is marked, and deleted after **14 days** (`DEAD_TOKEN_GRACE_DAYS`) unless the app sends a fresh token first (`/update-push-id` or a re-scan). This also frees the slot on that code.
+
 Subscriptions expire after **180 days** (`SUBSCRIPTION_TTL_DAYS`) and are deleted automatically. The clock starts at the first scan and a re-scan does not extend it. The value is a single setting, so it is easy to change; a change applies to existing rows too, because expiry is `created_date` plus this number.
 
 The infection name (gonorrhoea, syphilis, HIV, Mpox, HPV, …) is chosen in the **app** at notify time. The card is not tied to an STI. The phone should encrypt that choice; the lock-screen text is always generic: *You have a new message. Open the app to read it.*
@@ -99,6 +101,7 @@ See `.env.example`. Important flags:
 | `PUSH_STUB_MODE` | `true` logs pushes instead of calling Apple/Google. |
 | `RUN_BACKGROUND_JOBS` | Dispatcher + daily cleanup (subscriptions older than `SUBSCRIPTION_TTL_DAYS`) in this process. |
 | `SUBSCRIPTION_TTL_DAYS` | Days a card scan is kept (default 180). |
+| `DEAD_TOKEN_GRACE_DAYS` | Days a subscription with a dead push token is kept (default 14). |
 | `NOTIFY_MAX_CAMPAIGNS_PER_DAY` | Campaigns per rolling 24 hours (default 3). |
 | `NOTIFY_MAX_CAMPAIGNS`, `NOTIFY_RATE_LIMIT_DAYS` | Campaigns per rolling window (default 6 per 30 days). |
 | `NOTIFY_MAX_CONTACTS_PER_CAMPAIGN` | Contacts per Notify tap (default 100). |
@@ -151,7 +154,7 @@ app/main.py              FastAPI app, logging, no access log
 app/routes/              HTTP handlers
 app/services/            Device proof, rate limits, notify flow, push (stub/APNs/FCM)
 app/cron.py              Retry queue dispatch + daily cleanup
-migrations/                SQL, applied in order (001 schema, 002 drops campaign_contacts)
+migrations/                SQL, applied in order (001 schema, 002 drops campaign_contacts, 003 dead_since)
 docs/CRYPTO.md           What the app must do so both sides agree (hashing, encryption)
 pyproject.toml, uv.lock  Dependencies (ranges) and the exact pinned versions
 ```

@@ -53,7 +53,8 @@ async def subscribe(body: SubscribeRequest, conn: asyncpg.Connection = Depends(g
             ON CONFLICT (et_hash, push_id_hash)
             DO UPDATE SET
                 push_token = EXCLUDED.push_token,
-                platform   = EXCLUDED.platform
+                platform   = EXCLUDED.platform,
+                dead_since = NULL
             """,
             body.et_hash,
             body.push_id_hash,

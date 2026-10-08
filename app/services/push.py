@@ -26,6 +26,15 @@ APNS_HOST_PROD = "https://api.push.apple.com"
 APNS_HOST_DEV = "https://api.sandbox.push.apple.com"
 
 
+# Outcome of one push to one device.
+PUSH_OK = "ok"
+PUSH_FAILED = "failed"        # try again later (network, 5xx, rate limit...)
+PUSH_DEAD_TOKEN = "dead"      # the provider says this token will never work again
+
+# Return values of send_bundle(): a count of pushes (>= 0), or one of these.
+BUNDLE_FAILED = -1
+BUNDLE_DEAD_TOKEN = -2
+
 # Keep one push well under the ~4 KB APNs limit.
 MAX_PUSH_CIPHERTEXT_CHARS = 3000
 
@@ -59,7 +68,7 @@ def _make_apns_jwt() -> str:
     )
 
 
-async def _send_apns(push_token: str, payloads: list[str]) -> bool:
+async def _send_apns(push_token: str, payloads: list[str]) -> str:
     auth_token = _make_apns_jwt()
     url = f"{_apns_host()}/3/device/{push_token}"
 
@@ -82,9 +91,17 @@ async def _send_apns(push_token: str, payloads: list[str]) -> bool:
             timeout=10.0,
         )
 
-    if response.status_code != 200:
-        logger.error("APNs push failed: status=%s", response.status_code)
-    return response.status_code == 200
+    if response.status_code == 200:
+        return PUSH_OK
+    logger.error("APNs push failed: status=%s", response.status_code)
+    # 410 = Unregistered; 400 with BadDeviceToken = the token was never valid.
+    try:
+        reason = response.json().get("reason")
+    except Exception:
+        reason = None
+    if response.status_code == 410 or reason in ("Unregistered", "BadDeviceToken"):
+        return PUSH_DEAD_TOKEN
+    return PUSH_FAILED
 
 
 def _get_fcm_access_token() -> tuple[str, str]:
@@ -101,7 +118,7 @@ def _get_fcm_access_token() -> tuple[str, str]:
     return credentials.token, project_id
 
 
-async def _send_fcm(push_token: str, payloads: list[str]) -> bool:
+async def _send_fcm(push_token: str, payloads: list[str]) -> str:
     access_token, project_id = _get_fcm_access_token()
     url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
 
@@ -120,9 +137,11 @@ async def _send_fcm(push_token: str, payloads: list[str]) -> bool:
             timeout=10.0,
         )
 
-    if response.status_code != 200:
-        logger.error("FCM push failed: status=%s", response.status_code)
-    return response.status_code == 200
+    if response.status_code == 200:
+        return PUSH_OK
+    logger.error("FCM push failed: status=%s", response.status_code)
+    # 404 (UNREGISTERED) = the app was uninstalled or the token was replaced.
+    return PUSH_DEAD_TOKEN if response.status_code == 404 else PUSH_FAILED
 
 
 async def send_push(
@@ -130,9 +149,10 @@ async def send_push(
     platform: str,
     encrypted_payloads: list[str],
     push_id_hash: str,
-) -> bool:
+) -> str:
     """
-    Send ONE push carrying one or more ciphertexts. True if the provider accepted it.
+    Send ONE push carrying one or more ciphertexts. Returns PUSH_OK, PUSH_FAILED
+    or PUSH_DEAD_TOKEN.
     Never raises: one broken recipient must not stop the others.
     Logs the error type only, never the token or payload.
     """
@@ -140,7 +160,7 @@ async def send_push(
         logger.info("[PUSH STUB] would send to %s device", platform)
         if settings.environment == "development":
             dev_inbox.append(push_id_hash, encrypted_payloads, PUSH_ALERT_BODY)
-        return True
+        return PUSH_OK
 
     try:
         if platform == "ios":
@@ -150,15 +170,15 @@ async def send_push(
         logger.error("Unknown platform")
     except Exception as exc:
         logger.error("Push failed: %s", type(exc).__name__)
-    return False
+    return PUSH_FAILED
 
 
 async def send_bundle(recipient: dict, encrypted_payloads: list[str]) -> int:
     """
     One device, several ciphertexts (same person reached through several codes).
     The device buzzes once per push; ciphertexts are packed together so it
-    normally gets exactly one. Returns the number of pushes accepted, or -1 if
-    any push of the bundle failed.
+    normally gets exactly one. Returns the number of pushes accepted, BUNDLE_FAILED
+    if a push failed, or BUNDLE_DEAD_TOKEN if the provider says the token is dead.
     """
     chunks: list[list[str]] = [[]]
     size = 0
@@ -171,21 +191,12 @@ async def send_bundle(recipient: dict, encrypted_payloads: list[str]) -> int:
 
     accepted = 0
     for chunk in chunks:
-        ok = await send_push(
+        result = await send_push(
             recipient["push_token"], recipient["platform"], chunk, recipient["push_id_hash"]
         )
-        if not ok:
-            return -1
+        if result == PUSH_DEAD_TOKEN:
+            return BUNDLE_DEAD_TOKEN
+        if result != PUSH_OK:
+            return BUNDLE_FAILED
         accepted += 1
-    return accepted
-
-
-async def send_push_to_all(recipients: list[dict], encrypted_payload: str) -> int:
-    """Same ciphertext to every recipient (retry dispatch). Returns pushes accepted."""
-    accepted = 0
-    for recipient in recipients:
-        if await send_push(
-            recipient["push_token"], recipient["platform"], [encrypted_payload], recipient["push_id_hash"]
-        ):
-            accepted += 1
     return accepted
