@@ -21,6 +21,10 @@ logging.basicConfig(
 )
 logging.getLogger("uvicorn.access").disabled = True
 logging.getLogger("uvicorn.access").propagate = False
+# httpx logs every request URL at INFO, and an APNs URL contains the device's
+# push token. Only warnings and errors from these libraries are kept.
+for noisy in ("httpx", "httpcore", "hpack", "h2"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 

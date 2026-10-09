@@ -130,3 +130,11 @@ def test_apns_failure_logs_apples_reason_word_only(monkeypatch, caplog):
     assert result == push.PUSH_FAILED
     assert "status=403 reason=TopicDisallowed" in caplog.text
     assert "secret-device-token" not in caplog.text
+
+
+def test_http_client_logs_never_include_push_tokens(client, caplog):
+    """httpx puts the request URL (with the push token) in INFO logs; it must stay quiet."""
+    import logging
+
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+    assert logging.getLogger("httpcore").getEffectiveLevel() >= logging.WARNING
