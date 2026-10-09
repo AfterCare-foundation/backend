@@ -102,7 +102,7 @@ async def delete_subscription(
         body.push_id_hash,
     )
     await conn.execute(
-        "DELETE FROM pending_notifications WHERE sender_push_id_hash = $1",
+        "DELETE FROM mailbox WHERE push_id_hash = $1",
         body.push_id_hash,
     )
     await conn.execute(

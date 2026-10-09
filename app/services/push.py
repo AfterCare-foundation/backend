@@ -5,9 +5,9 @@
 # Lock screen (visible to Apple/Google and anyone who sees the phone):
 #   "You have a new message. Open the app to read it."
 #
-# Custom data field `enc` (ciphertext from the sender's phone):
-#   Apple and Google transport it. They do not have the card token, so they
-#   cannot decrypt the STI type. The recipient app decrypts locally.
+# The push carries NO ciphertext: it only wakes the phone. The app then
+# fetches its messages from the server over its own TLS connection (/inbox).
+# Apple and Google therefore never see the encrypted payloads.
 
 import json
 import logging
@@ -16,7 +16,6 @@ import time
 import httpx
 
 from app.config import settings
-from app.services import dev_inbox
 
 logger = logging.getLogger(__name__)
 
@@ -31,22 +30,6 @@ PUSH_OK = "ok"
 PUSH_FAILED = "failed"        # try again later (network, 5xx, rate limit...)
 PUSH_DEAD_TOKEN = "dead"      # the provider says this token will never work again
 
-# Return values of send_bundle(): a count of pushes (>= 0), or one of these.
-BUNDLE_FAILED = -1
-BUNDLE_DEAD_TOKEN = -2
-
-# Keep one push well under the ~4 KB APNs limit.
-MAX_PUSH_CIPHERTEXT_CHARS = 3000
-
-
-def _custom_fields(payloads: list[str]) -> dict:
-    """`enc` = first ciphertext (as always); `more` = any further ones."""
-    fields = {"enc": payloads[0]}
-    if len(payloads) > 1:
-        fields["more"] = payloads[1:]
-    return fields
-
-
 def _apns_host() -> str:
     return APNS_HOST_PROD if settings.apns_production else APNS_HOST_DEV
 
@@ -54,8 +37,12 @@ def _apns_host() -> str:
 def _make_apns_jwt() -> str:
     import jwt
 
-    with open(settings.apns_key_file, "r") as f:
-        private_key = f.read()
+    if settings.apns_key:
+        # Env vars sometimes carry the line breaks as a literal backslash-n.
+        private_key = settings.apns_key.replace("\\n", "\n")
+    else:
+        with open(settings.apns_key_file, "r") as f:
+            private_key = f.read()
 
     return jwt.encode(
         payload={
@@ -68,7 +55,7 @@ def _make_apns_jwt() -> str:
     )
 
 
-async def _send_apns(push_token: str, payloads: list[str]) -> str:
+async def _send_apns(push_token: str) -> str:
     auth_token = _make_apns_jwt()
     url = f"{_apns_host()}/3/device/{push_token}"
 
@@ -80,7 +67,6 @@ async def _send_apns(push_token: str, payloads: list[str]) -> str:
                     "alert": PUSH_ALERT_BODY,
                     "sound": "default",
                 },
-                **_custom_fields(payloads),
             },
             headers={
                 "authorization": f"bearer {auth_token}",
@@ -118,7 +104,7 @@ def _get_fcm_access_token() -> tuple[str, str]:
     return credentials.token, project_id
 
 
-async def _send_fcm(push_token: str, payloads: list[str]) -> str:
+async def _send_fcm(push_token: str) -> str:
     access_token, project_id = _get_fcm_access_token()
     url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
 
@@ -129,8 +115,6 @@ async def _send_fcm(push_token: str, payloads: list[str]) -> str:
                 "message": {
                     "token": push_token,
                     "notification": {"body": PUSH_ALERT_BODY},
-                    "data": {k: v if isinstance(v, str) else json.dumps(v)
-                             for k, v in _custom_fields(payloads).items()},
                 }
             },
             headers={"Authorization": f"Bearer {access_token}"},
@@ -144,59 +128,22 @@ async def _send_fcm(push_token: str, payloads: list[str]) -> str:
     return PUSH_DEAD_TOKEN if response.status_code == 404 else PUSH_FAILED
 
 
-async def send_push(
-    push_token: str,
-    platform: str,
-    encrypted_payloads: list[str],
-    push_id_hash: str,
-) -> str:
+async def send_push(push_token: str, platform: str) -> str:
     """
-    Send ONE push carrying one or more ciphertexts. Returns PUSH_OK, PUSH_FAILED
-    or PUSH_DEAD_TOKEN.
+    Send ONE wake-up push. Returns PUSH_OK, PUSH_FAILED or PUSH_DEAD_TOKEN.
     Never raises: one broken recipient must not stop the others.
-    Logs the error type only, never the token or payload.
+    Logs the error type only, never the token.
     """
     if settings.push_stub_mode:
         logger.info("[PUSH STUB] would send to %s device", platform)
-        if settings.environment == "development":
-            dev_inbox.append(push_id_hash, encrypted_payloads, PUSH_ALERT_BODY)
         return PUSH_OK
 
     try:
         if platform == "ios":
-            return await _send_apns(push_token, encrypted_payloads)
+            return await _send_apns(push_token)
         if platform == "android":
-            return await _send_fcm(push_token, encrypted_payloads)
+            return await _send_fcm(push_token)
         logger.error("Unknown platform")
     except Exception as exc:
         logger.error("Push failed: %s", type(exc).__name__)
     return PUSH_FAILED
-
-
-async def send_bundle(recipient: dict, encrypted_payloads: list[str]) -> int:
-    """
-    One device, several ciphertexts (same person reached through several codes).
-    The device buzzes once per push; ciphertexts are packed together so it
-    normally gets exactly one. Returns the number of pushes accepted, BUNDLE_FAILED
-    if a push failed, or BUNDLE_DEAD_TOKEN if the provider says the token is dead.
-    """
-    chunks: list[list[str]] = [[]]
-    size = 0
-    for payload in encrypted_payloads:
-        if chunks[-1] and size + len(payload) > MAX_PUSH_CIPHERTEXT_CHARS:
-            chunks.append([])
-            size = 0
-        chunks[-1].append(payload)
-        size += len(payload)
-
-    accepted = 0
-    for chunk in chunks:
-        result = await send_push(
-            recipient["push_token"], recipient["platform"], chunk, recipient["push_id_hash"]
-        )
-        if result == PUSH_DEAD_TOKEN:
-            return BUNDLE_DEAD_TOKEN
-        if result != PUSH_OK:
-            return BUNDLE_FAILED
-        accepted += 1
-    return accepted

@@ -42,7 +42,9 @@ async def update_push_id(body: UpdatePushIdRequest, conn: asyncpg.Connection = D
             "SELECT 1 FROM devices WHERE push_id_hash = $1", new
         )
         if new_device_exists:
-            # The new ID already registered itself: just drop the old device.
+            # The new ID already registered itself: move the waiting messages
+            # over, then drop the old device.
+            await conn.execute("UPDATE mailbox SET push_id_hash = $1 WHERE push_id_hash = $2", new, old)
             await conn.execute("DELETE FROM devices WHERE push_id_hash = $1", old)
         else:
             await conn.execute(
@@ -60,10 +62,6 @@ async def update_push_id(body: UpdatePushIdRequest, conn: asyncpg.Connection = D
                 sub["et_hash"], new, body.new_push_token, body.new_platform, sub["created_date"],
             )
 
-        await conn.execute(
-            "UPDATE pending_notifications SET sender_push_id_hash = $1 WHERE sender_push_id_hash = $2",
-            new, old,
-        )
         await conn.execute(
             "UPDATE notification_campaigns SET push_id_hash = $1 WHERE push_id_hash = $2",
             new, old,

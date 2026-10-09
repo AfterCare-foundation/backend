@@ -11,7 +11,7 @@ from starlette.requests import Request
 
 from app.config import settings
 from app.database import init_db, close_db
-from app.routes import subscribe, notify, push_id, dev_inbox
+from app.routes import subscribe, notify, push_id, inbox
 from app import cron
 
 # Status and our own messages only. No request bodies, no client IPs.
@@ -61,7 +61,7 @@ app = FastAPI(
 app.include_router(subscribe.router)
 app.include_router(notify.router)
 app.include_router(push_id.router)
-app.include_router(dev_inbox.router)
+app.include_router(inbox.router)
 
 
 @app.middleware("http")

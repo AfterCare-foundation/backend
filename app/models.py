@@ -88,8 +88,8 @@ class NotifyRequest(BaseModel):
         return require_credential(v)
 
 
-class DevInboxRequest(BaseModel):
-    """Pull stub pushes for this device. Development only."""
+class InboxRequest(BaseModel):
+    """Fetch the messages waiting for this device."""
     push_id_hash: str
     device_credential: str
 
@@ -98,10 +98,17 @@ class DevInboxRequest(BaseModel):
     def validate_hash(cls, v: str) -> str:
         return require_hash(v)
 
-    @field_validator("device_credential")
+
+class InboxConfirmRequest(BaseModel):
+    """Tell the server these messages arrived safely, so it can delete them."""
+    push_id_hash: str
+    device_credential: str
+    ids: list[UUID] = Field(min_length=1, max_length=200)
+
+    @field_validator("push_id_hash")
     @classmethod
-    def validate_credential(cls, v: str) -> str:
-        return require_credential(v)
+    def validate_hash(cls, v: str) -> str:
+        return require_hash(v)
 
 
 class DeleteSubscriptionRequest(BaseModel):

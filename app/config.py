@@ -21,6 +21,8 @@ class Settings(BaseSettings):
 
     apns_key_id: str = ""
     apns_key_file: str = "secrets/apns_key.p8"
+    # Alternative to the file: the .p8 text itself (for hosts without secret files).
+    apns_key: str = ""
     apns_team_id: str = ""
     apns_bundle_id: str = "eu.after-care.app"
     apns_production: bool = False
@@ -39,6 +41,9 @@ class Settings(BaseSettings):
 
     # New connections (card scans) one device may add per UTC day.
     max_subscriptions_per_day: int = 30
+
+    # How long a notification waits in the recipient's mailbox for the app to fetch it.
+    mailbox_ttl_days: int = 7
 
     notify_rate_limit_days: int = 30
     notify_max_campaigns: int = 6

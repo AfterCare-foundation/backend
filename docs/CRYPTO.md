@@ -18,7 +18,7 @@ Hex means **lowercase**, no `0x`, no colons.
 | `push_token` | The real APNs/FCM token string (needed to deliver). |
 | `device_credential` | 32 random bytes as 64 hex. Create once, store in Keychain / Keystore. Send the hex secret; the server stores `SHA-256(those 32 bytes)`. |
 | `platform` | `ios` or `android` |
-| `campaign_id` | New UUID per tap of Notify, sent in ONE request. An id can be used once (`409 campaign_already_used` if repeated). Never retry a failed push yourself: the server retries failed pushes for up to a day, and keeps a message for a recipient whose push token is dead for up to 30 days, delivering it once the app sends a new token (`retrying` in the response says how many). If `pushed` and `retrying` are both 0 (nobody else on the codes yet), the same id may be reused. |
+| `campaign_id` | New UUID per tap of Notify, sent in ONE request. An id can be used once (`409 campaign_already_used` if repeated). Never retry a failed push yourself: the server retries a failed wake-up push for about a day. The message itself is already safe in the recipient's mailbox for 7 days, whatever happens to the push (`retrying` in the response says how many contacts have not been woken yet). If `pushed` and `retrying` are both 0 (nobody else on the codes yet), the same id may be reused. |
 | `encrypted_payload` | Per card. See §2. |
 
 Do not send the raw `TOKEN` to the server.
@@ -53,13 +53,13 @@ enc_key = SHA-256(  UTF-8("aftercare-enc-v1")  ||  TOKEN  )
 
 The partner decrypts with the same `TOKEN` from their scan. Lock screen stays generic; show `sti` only inside the app after biometric unlock.
 
-Push custom field: `enc` = the same Base64 string you put in `encrypted_payload`.
+The push does **not** carry the ciphertext (no `enc`, no `more`). It only wakes the phone with the generic lock-screen text. The ciphertext waits on the server in the recipient's mailbox; the app collects it:
 
-If one person is reached through several of the sender's codes in the same
-`/notify` call, they get ONE push. `enc` holds the first ciphertext and `more`
-(a list of Base64 strings, present only then) holds the others. The app must
-decrypt `enc` and every entry of `more` (each with the key from its own card)
-and show each STI once. Android delivers `more` as a JSON-encoded string.
+- `POST /inbox` with `{push_id_hash, device_credential}` returns `{"notifications": [{"id": "<uuid>", "enc": "<the Base64 string the sender put in encrypted_payload>"}]}`, oldest first, at most 200 per call. It deletes nothing.
+- The app decrypts each `enc` with the key from the matching card, stores the result on the phone, and only then calls `POST /inbox/confirm` with `{push_id_hash, device_credential, ids: ["<uuid>", ...]}` (1 to 200 ids). Only confirmed messages are deleted.
+- Fetch on every app open, on a tapped or foreground push, and again after confirming (there may be more than 200). A message nobody fetches is deleted after 7 days.
+- If one person is reached through several of the sender's codes, they get one push but several messages. The app must try each card key on each message and show each STI once.
+- `/dev/inbox` no longer exists. `/inbox` works in every mode, including stub mode.
 
 ---
 

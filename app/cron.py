@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import app.database as database
 from app.config import settings
-from app.services.push import BUNDLE_DEAD_TOKEN, send_bundle
+from app.services.push import PUSH_DEAD_TOKEN, PUSH_OK, send_push
 from app.services.tokens import mark_dead
 
 logger = logging.getLogger(__name__)
@@ -21,76 +21,42 @@ LOCK_DISPATCH = 87001
 LOCK_CLEANUP = 87002
 
 
-async def dispatch_pending_notifications():
+async def dispatch_wakeups():
+    """
+    Retry lock-screen pushes that failed. The messages themselves are already
+    safe in the mailbox; this only buzzes the phone. Tries for about a day
+    (today and yesterday), and never calls a token the provider called dead.
+    """
     async with database.pool.acquire() as conn:
         locked = await conn.fetchval("SELECT pg_try_advisory_lock($1)", LOCK_DISPATCH)
         if not locked:
             return
         try:
-            rows = await conn.fetch(
+            devices = await conn.fetch(
                 """
-                SELECT id, et_hash, sender_push_id_hash, encrypted_payload, scheduled_at
-                FROM pending_notifications
-                WHERE scheduled_at <= NOW()
-                ORDER BY scheduled_at
+                SELECT DISTINCT ON (m.push_id_hash)
+                       m.push_id_hash, s.push_token, s.platform
+                FROM mailbox m
+                JOIN token_subscriptions s ON s.push_id_hash = m.push_id_hash
+                WHERE m.wake_pending
+                  AND m.created_date >= CURRENT_DATE - 1
+                  AND s.dead_since IS NULL
+                ORDER BY m.push_id_hash
                 """
             )
-            if not rows:
+            if not devices:
                 return
 
-            logger.info("Dispatching %s pending notification(s)", len(rows))
-
-            # Group by recipient device: if several due rows reach the same
-            # device (e.g. two codes with the same person, two failed pushes
-            # for both), send ONE push carrying all ciphertexts.
-            recipients_of = {}
-            has_dead = {}
-            per_device = {}
-            for row in rows:
-                recipients = await conn.fetch(
-                    """
-                    SELECT push_id_hash, push_token, platform, dead_since
-                    FROM token_subscriptions
-                    WHERE et_hash = $1
-                      AND push_id_hash != $2
-                    """,
-                    row["et_hash"],
-                    row["sender_push_id_hash"],
-                )
-                recipients_of[row["id"]] = [r["push_id_hash"] for r in recipients]
-                has_dead[row["id"]] = any(r["dead_since"] is not None for r in recipients)
-                for r in recipients:
-                    if r["dead_since"] is not None:
-                        # The provider already said this token is dead: do not
-                        # call it again. Wait for the app to send a new token.
-                        continue
-                    entry = per_device.setdefault(
-                        r["push_id_hash"], {"recipient": dict(r), "payloads": []}
+            logger.info("Retrying %s wake-up push(es)", len(devices))
+            for d in devices:
+                result = await send_push(d["push_token"], d["platform"])
+                if result == PUSH_DEAD_TOKEN:
+                    await mark_dead(conn, d["push_id_hash"], d["push_token"])
+                elif result == PUSH_OK:
+                    await conn.execute(
+                        "UPDATE mailbox SET wake_pending = FALSE WHERE push_id_hash = $1",
+                        d["push_id_hash"],
                     )
-                    entry["payloads"].append(row["encrypted_payload"])
-
-            device_ok = {}
-            for device, entry in per_device.items():
-                count = await send_bundle(entry["recipient"], entry["payloads"])
-                if count == BUNDLE_DEAD_TOKEN:
-                    await mark_dead(conn, device, entry["recipient"]["push_token"])
-                device_ok[device] = count >= 0
-
-            for row in rows:
-                # Two kinds of waiting:
-                # - ordinary failure: retry every run, give up after a day;
-                # - dead token: no calls, but keep the message for the dead-token
-                #   grace period, so it is delivered if the app sends a new token.
-                keep_days = settings.dead_token_grace_days if has_dead[row["id"]] else 1
-                too_old = row["scheduled_at"] < datetime.now(timezone.utc) - timedelta(days=keep_days)
-                # device_ok has no entry for skipped (dead) devices: they count as not delivered.
-                all_ok = all(device_ok.get(d, False) for d in recipients_of[row["id"]])
-                if not all_ok and not too_old:
-                    continue
-                await conn.execute(
-                    "DELETE FROM pending_notifications WHERE id = $1",
-                    row["id"],
-                )
         finally:
             await conn.execute("SELECT pg_advisory_unlock($1)", LOCK_DISPATCH)
 
@@ -120,13 +86,10 @@ async def cleanup_expired_subscriptions():
             if int(dead_deleted) > 0:
                 logger.info("Dead-token cleanup: deleted %s subscription(s)", dead_deleted)
 
+            # Messages nobody fetched in time.
             await conn.execute(
-                """
-                DELETE FROM pending_notifications
-                WHERE et_hash NOT IN (
-                    SELECT DISTINCT et_hash FROM token_subscriptions
-                )
-                """
+                "DELETE FROM mailbox WHERE created_date < CURRENT_DATE - $1::int",
+                settings.mailbox_ttl_days,
             )
 
             campaign_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.notify_rate_limit_days)  # campaigns only matter inside the rate-limit window
@@ -152,9 +115,9 @@ async def cleanup_expired_subscriptions():
 async def run_dispatcher():
     while True:
         try:
-            await dispatch_pending_notifications()
+            await dispatch_wakeups()
         except Exception:
-            logger.exception("Error in dispatch_pending_notifications")
+            logger.exception("Error in dispatch_wakeups")
         await asyncio.sleep(DISPATCH_INTERVAL_SECONDS)
 
 

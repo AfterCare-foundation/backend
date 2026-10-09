@@ -9,7 +9,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services import dev_inbox
 
 PGPASSWORD = "aftercare_dev_password"
 
@@ -30,7 +29,7 @@ def wipe_db():
             "-v", "ON_ERROR_STOP=1",
             "-c",
             """
-            TRUNCATE pending_notifications,
+            TRUNCATE mailbox,
                      notification_campaigns, token_subscriptions, devices
             CASCADE;
             """,
@@ -43,23 +42,24 @@ def wipe_db():
 @pytest.fixture
 def client():
     wipe_db()
-    dev_inbox.clear()
     with TestClient(app) as test_client:
         yield test_client
-    dev_inbox.clear()
     wipe_db()
 
 
 @pytest.fixture
 def sent(monkeypatch):
-    """Capture push dispatches instead of calling APNs/FCM."""
+    """Capture wake-up pushes instead of calling APNs/FCM."""
+    from app.services.push import PUSH_OK
+
     calls = []
 
-    async def fake(recipient, payloads):
-        calls.append({"recipients": [recipient], "enc": payloads[0], "payloads": payloads})
-        return 1
+    async def fake(push_token, platform):
+        calls.append({"push_token": push_token, "platform": platform})
+        return PUSH_OK
 
-    monkeypatch.setattr("app.services.notify_flow.send_bundle", fake)
+    monkeypatch.setattr("app.services.notify_flow.send_push", fake)
+    monkeypatch.setattr("app.cron.send_push", fake)
     return calls
 
 
@@ -92,9 +92,16 @@ def notify(client, *, device: str, card: str, campaign_id: str | None = None):
 
 def pull_inbox(client, *, device: str):
     return client.post(
-        "/dev/inbox",
+        "/inbox",
         json={
             "push_id_hash": sha256_hex(f"push:{device}"),
             "device_credential": sha256_hex(f"secret:{device}"),
         },
     )
+
+
+def waiting(client, *, device: str) -> list[str]:
+    """Ciphertexts waiting for this device, oldest first."""
+    response = pull_inbox(client, device=device)
+    assert response.status_code == 200, response.text
+    return [n["enc"] for n in response.json()["notifications"]]
