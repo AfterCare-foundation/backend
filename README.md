@@ -103,7 +103,7 @@ See `.env.example`. Important flags:
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_PRODUCTION` | Apple push settings. `APNS_PRODUCTION=true` for TestFlight and App Store builds. |
 | `APNS_KEY` / `APNS_KEY_FILE` | The `.p8` key: its text in `APNS_KEY` (for hosts without secret files), or a file path. Never commit it. |
 | `MAILBOX_TTL_DAYS` | Days a notification waits for the app to fetch it (default 7). |
-| `RUN_BACKGROUND_JOBS` | Dispatcher + daily cleanup (subscriptions older than `SUBSCRIPTION_TTL_DAYS`) in this process. |
+| `RUN_BACKGROUND_JOBS` | Wake-up retries (every 15 minutes) and the daily cleanup in this process. Cleanup deletes expired subscriptions (`SUBSCRIPTION_TTL_DAYS`), long-dead tokens and unfetched mailbox messages (`MAILBOX_TTL_DAYS`). |
 | `SUBSCRIPTION_TTL_DAYS` | Days a card scan is kept (default 180). |
 | `MAX_SUBSCRIPTIONS_PER_DAY` | New connections one device may add per UTC day (default 30). |
 | `DEAD_TOKEN_GRACE_DAYS` | Days a subscription with a dead push token is kept (default 30). |
@@ -113,7 +113,11 @@ See `.env.example`. Important flags:
 
 ### Test instance on Scalingo
 
-Procfile and `.python-version` are all it needs. Set `ENVIRONMENT=development`, `PUSH_STUB_MODE=true`, `RUN_BACKGROUND_JOBS=true` and `WEB_CONCURRENCY=1` (one process is enough for a test instance), add the PostgreSQL add-on, and apply every file in `migrations/` in order. Deploy new code **before** a migration that drops something the old code still reads. `/docs` is open in this mode, so use it for test data only.
+Procfile and `.python-version` are all it needs. Set `ENVIRONMENT=development`, `RUN_BACKGROUND_JOBS=true` and `WEB_CONCURRENCY=1` (one process is enough for a test instance), add the PostgreSQL add-on, and apply every file in `migrations/` in order. `/docs` is open in this mode, so use it for test data only.
+
+Push has two modes. With `PUSH_STUB_MODE=true` pushes are only logged and nobody's phone buzzes; messages still land in the mailbox, so an app can already fetch them. For real iOS push (TestFlight builds) set `PUSH_STUB_MODE=false`, `APNS_PRODUCTION=true`, `APNS_BUNDLE_ID`, `APNS_KEY_ID`, `APNS_TEAM_ID` and `APNS_KEY` (the `.p8` text; keep the file itself out of every repo). A failed push is logged as `APNs push failed: status=… reason=…`, with Apple's reason word and never the token.
+
+Order matters when a migration and the code depend on each other. Migration 004 creates the mailbox and drops the old retry queue, so run it right before deploying the code that uses it.
 
 Production must use **HTTPS**. The device credential is sent on each mutating request; it is a bearer secret.
 
