@@ -79,12 +79,16 @@ async def _send_apns(push_token: str) -> str:
 
     if response.status_code == 200:
         return PUSH_OK
-    logger.error("APNs push failed: status=%s", response.status_code)
     # 410 = Unregistered; 400 with BadDeviceToken = the token was never valid.
     try:
         reason = response.json().get("reason")
     except Exception:
         reason = None
+    # Apple's reason is a fixed word such as BadDeviceToken or TopicDisallowed,
+    # which tells us at once whether the key, the bundle ID or the environment is
+    # wrong. Anything else is not logged, so a surprise can never leak data.
+    logged = reason if isinstance(reason, str) and reason.isalpha() and len(reason) <= 40 else "-"
+    logger.error("APNs push failed: status=%s reason=%s", response.status_code, logged)
     if response.status_code == 410 or reason in ("Unregistered", "BadDeviceToken"):
         return PUSH_DEAD_TOKEN
     return PUSH_FAILED

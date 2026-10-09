@@ -102,3 +102,31 @@ def test_the_push_carries_no_ciphertext(client, monkeypatch):
     from app.services import push
 
     assert list(inspect.signature(push.send_push).parameters) == ["push_token", "platform"]
+
+
+def test_apns_failure_logs_apples_reason_word_only(monkeypatch, caplog):
+    import asyncio
+    import logging
+
+    import httpx
+
+    from app.config import settings
+    from app.services import push
+
+    monkeypatch.setattr(push, "_make_apns_jwt", lambda: "jwt")
+    monkeypatch.setattr(settings, "push_stub_mode", False)
+
+    class Fake:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, **kw):
+            return httpx.Response(403, json={"reason": "TopicDisallowed"})
+
+    monkeypatch.setattr(push.httpx, "AsyncClient", Fake)
+    with caplog.at_level(logging.ERROR):
+        result = asyncio.run(push.send_push("secret-device-token", "ios"))
+
+    assert result == push.PUSH_FAILED
+    assert "status=403 reason=TopicDisallowed" in caplog.text
+    assert "secret-device-token" not in caplog.text
