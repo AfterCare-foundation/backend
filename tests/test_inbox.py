@@ -79,8 +79,8 @@ def test_unfetched_messages_expire_after_the_retention_period(client, sent):
     subscribe(client, device="bob", card="green")
     notify(client, device="alice", card="green")
 
-    # The pink message is 8 days old, the green one 3.
-    _sql("UPDATE mailbox SET created_date = CURRENT_DATE - 8 WHERE encrypted_payload = 'ciphertext-for-pink'")
+    # The pink message is 31 days old, the green one 3.
+    _sql("UPDATE mailbox SET created_date = CURRENT_DATE - 31 WHERE encrypted_payload = 'ciphertext-for-pink'")
     _sql("UPDATE mailbox SET created_date = CURRENT_DATE - 3 WHERE encrypted_payload = 'ciphertext-for-green'")
 
     client.portal.call(cleanup_expired_subscriptions)

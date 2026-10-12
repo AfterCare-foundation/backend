@@ -21,7 +21,7 @@ Sauna wristband pairing, CAPTCHA, and anomaly detection are not in this codebase
 | Hashed push ID + the real push token (Apple/Google need it to deliver) | IP addresses |
 | UTC **date** a card was scanned (`created_date`) | Encounter time |
 | Per Notify tap: `campaign_id`, sender device hash and the exact time, for rate limits (30 days) | Which contacts a campaign reached |
-| Each notification's encrypted bytes, filed under the **recipient device** with a date only, until the app collects it or `MAILBOX_TTL_DAYS` (7) pass | Plaintext STI type, the card hash or the sender of a waiting message |
+| Each notification's encrypted bytes, filed under the **recipient device** with a date only, until the app collects it or `MAILBOX_TTL_DAYS` (30) pass | Plaintext STI type, the card hash or the sender of a waiting message |
 
 A subscription whose push token Apple or Google report as dead (app uninstalled, token replaced) is marked, and deleted after **30 days** (`DEAD_TOKEN_GRACE_DAYS`, so a phone restored from a backup has time to send its new token) unless the app sends a fresh token first (`/update-push-id` or a re-scan). This also frees the slot on that code. Waiting messages do not depend on the token: they stay in the mailbox either way.
 
@@ -39,7 +39,7 @@ Each card has its own token, so the app encrypts the STI type **once per contact
 2. Later, one person taps Notify → `POST /notify` (must already be subscribed to that token).
 3. The sender is excluded from the recipient list.
 4. Every notification is stored **immediately** in the recipient's mailbox, and the recipient's phone is woken with a generic push (APNs/FCM). There is no scheduling.
-5. The app opens, calls `POST /inbox`, decrypts what it finds, then calls `POST /inbox/confirm` so the server deletes those messages. Fetching alone deletes nothing, so a crash cannot lose a message. Messages nobody collects are deleted after `MAILBOX_TTL_DAYS` (7).
+5. The app opens, calls `POST /inbox`, decrypts what it finds, then calls `POST /inbox/confirm` so the server deletes those messages. Fetching alone deletes nothing, so a crash cannot lose a message. Messages nobody collects are deleted after `MAILBOX_TTL_DAYS` (30).
 6. If the wake-up push fails, the message is still safe in the mailbox. The background job retries the push every 15 minutes for about a day, and never calls a token the provider reported dead. The app never retries.
 
 ### Notify rules
@@ -102,7 +102,7 @@ See `.env.example`. Important flags:
 | `PUSH_STUB_MODE` | `true` logs pushes instead of calling Apple/Google. Messages still go to the mailbox. |
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_PRODUCTION` | Apple push settings. `APNS_PRODUCTION=true` for TestFlight and App Store builds. |
 | `APNS_KEY` / `APNS_KEY_FILE` | The `.p8` key: its text in `APNS_KEY` (for hosts without secret files), or a file path. Never commit it. |
-| `MAILBOX_TTL_DAYS` | Days a notification waits for the app to fetch it (default 7). |
+| `MAILBOX_TTL_DAYS` | Days a notification waits for the app to fetch it (default 30). |
 | `RUN_BACKGROUND_JOBS` | Wake-up retries (every 15 minutes) and the daily cleanup in this process. Cleanup deletes expired subscriptions (`SUBSCRIPTION_TTL_DAYS`), long-dead tokens and unfetched mailbox messages (`MAILBOX_TTL_DAYS`). |
 | `SUBSCRIPTION_TTL_DAYS` | Days a card scan is kept (default 180). |
 | `MAX_SUBSCRIPTIONS_PER_DAY` | New connections one device may add per UTC day (default 30). |

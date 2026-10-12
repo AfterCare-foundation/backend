@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     max_subscriptions_per_day: int = 30
 
     # How long a notification waits in the recipient's mailbox for the app to fetch it.
-    mailbox_ttl_days: int = 7
+    mailbox_ttl_days: int = 30
 
     notify_rate_limit_days: int = 30
     notify_max_campaigns: int = 6
