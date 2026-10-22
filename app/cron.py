@@ -35,9 +35,10 @@ async def dispatch_wakeups():
             devices = await conn.fetch(
                 """
                 SELECT DISTINCT ON (m.push_id_hash)
-                       m.push_id_hash, s.push_token, s.platform
+                       m.push_id_hash, s.push_token, s.platform, d.lang
                 FROM mailbox m
                 JOIN token_subscriptions s ON s.push_id_hash = m.push_id_hash
+                JOIN devices d ON d.push_id_hash = m.push_id_hash
                 WHERE m.wake_pending
                   AND m.created_date >= CURRENT_DATE - 1
                   AND s.dead_since IS NULL
@@ -49,7 +50,7 @@ async def dispatch_wakeups():
 
             logger.info("Retrying %s wake-up push(es)", len(devices))
             for d in devices:
-                result = await send_push(d["push_token"], d["platform"])
+                result = await send_push(d["push_token"], d["platform"], lang=d["lang"])
                 if result == PUSH_DEAD_TOKEN:
                     await mark_dead(conn, d["push_id_hash"], d["push_token"])
                 elif result == PUSH_OK:

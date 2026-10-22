@@ -2,7 +2,8 @@
 #
 # Sends push notifications to iOS (APNs) and Android (FCM).
 #
-# Lock screen (visible to Apple/Google and anyone who sees the phone):
+# Lock screen (visible to Apple/Google and anyone who sees the phone), title
+# "AfterCare", in the device's language (en or de):
 #   "You have a new message. Open the app to read it."
 #
 # The push carries NO ciphertext: it only wakes the phone. The app then
@@ -19,7 +20,16 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-PUSH_ALERT_BODY = "You have a new message. Open the app to read it."
+PUSH_TITLE = "AfterCare"
+PUSH_ALERT_BODIES = {
+    "en": "You have a new message. Open the app to read it.",
+    "de": "Du hast eine neue Nachricht. Öffne die App, um sie zu lesen.",
+}
+
+
+def alert_body(lang: str) -> str:
+    """The text for this language; any other value gets English."""
+    return PUSH_ALERT_BODIES.get(lang, PUSH_ALERT_BODIES["en"])
 
 APNS_HOST_PROD = "https://api.push.apple.com"
 APNS_HOST_DEV = "https://api.sandbox.push.apple.com"
@@ -55,7 +65,7 @@ def _make_apns_jwt() -> str:
     )
 
 
-async def _send_apns(push_token: str) -> str:
+async def _send_apns(push_token: str, lang: str) -> str:
     auth_token = _make_apns_jwt()
     url = f"{_apns_host()}/3/device/{push_token}"
 
@@ -64,7 +74,7 @@ async def _send_apns(push_token: str) -> str:
             url,
             json={
                 "aps": {
-                    "alert": PUSH_ALERT_BODY,
+                    "alert": {"title": PUSH_TITLE, "body": alert_body(lang)},
                     "sound": "default",
                 },
             },
@@ -108,7 +118,7 @@ def _get_fcm_access_token() -> tuple[str, str]:
     return credentials.token, project_id
 
 
-async def _send_fcm(push_token: str) -> str:
+async def _send_fcm(push_token: str, lang: str) -> str:
     access_token, project_id = _get_fcm_access_token()
     url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
 
@@ -118,7 +128,7 @@ async def _send_fcm(push_token: str) -> str:
             json={
                 "message": {
                     "token": push_token,
-                    "notification": {"body": PUSH_ALERT_BODY},
+                    "notification": {"title": PUSH_TITLE, "body": alert_body(lang)},
                 }
             },
             headers={"Authorization": f"Bearer {access_token}"},
@@ -132,11 +142,11 @@ async def _send_fcm(push_token: str) -> str:
     return PUSH_DEAD_TOKEN if response.status_code == 404 else PUSH_FAILED
 
 
-async def send_push(push_token: str, platform: str) -> str:
+async def send_push(push_token: str, platform: str, lang: str = "en") -> str:
     """
     Send ONE wake-up push. Returns PUSH_OK, PUSH_FAILED or PUSH_DEAD_TOKEN.
     Never raises: one broken recipient must not stop the others.
-    Logs the error type only, never the token.
+    Logs the error type only, never the token or the language.
     """
     if settings.push_stub_mode:
         logger.info("[PUSH STUB] would send to %s device", platform)
@@ -144,9 +154,9 @@ async def send_push(push_token: str, platform: str) -> str:
 
     try:
         if platform == "ios":
-            return await _send_apns(push_token)
+            return await _send_apns(push_token, lang)
         if platform == "android":
-            return await _send_fcm(push_token)
+            return await _send_fcm(push_token, lang)
         logger.error("Unknown platform")
     except Exception as exc:
         logger.error("Push failed: %s", type(exc).__name__)

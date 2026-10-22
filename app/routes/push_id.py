@@ -27,6 +27,8 @@ async def update_push_id(body: UpdatePushIdRequest, conn: asyncpg.Connection = D
                 "UPDATE token_subscriptions SET push_token = $1, platform = $2 WHERE push_id_hash = $3",
                 body.new_push_token, body.new_platform, old,
             )
+            if body.lang is not None:
+                await conn.execute("UPDATE devices SET lang = $1 WHERE push_id_hash = $2", body.lang, old)
             return {"status": "ok"}
 
         # Subscriptions point at devices(push_id_hash), so lift them out first,
@@ -50,6 +52,9 @@ async def update_push_id(body: UpdatePushIdRequest, conn: asyncpg.Connection = D
             await conn.execute(
                 "UPDATE devices SET push_id_hash = $1 WHERE push_id_hash = $2", new, old
             )
+
+        if body.lang is not None:
+            await conn.execute("UPDATE devices SET lang = $1 WHERE push_id_hash = $2", body.lang, new)
 
         for sub in subs:
             await conn.execute(

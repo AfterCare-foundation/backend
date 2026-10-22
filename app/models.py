@@ -25,12 +25,26 @@ def require_credential(value: str) -> str:
     return value
 
 
+def normalize_lang(value):
+    """'en' or 'de' stay; anything else becomes 'en'; missing stays missing.
+    Runs before type checking, so a bad value is never rejected or echoed back."""
+    if value is None:
+        return None
+    return value if value in ("en", "de") else "en"
+
+
 class SubscribeRequest(BaseModel):
     et_hash: str
     push_id_hash: str
     push_token: str
     platform: str
     device_credential: str = Field(description="256-bit secret from Keychain / Keystore, hex-encoded")
+    lang: str | None = Field(default=None, description="'en' (default) or 'de': language of the push text")
+
+    @field_validator("lang", mode="before")
+    @classmethod
+    def validate_lang(cls, v):
+        return normalize_lang(v)
 
     @field_validator("et_hash", "push_id_hash")
     @classmethod
@@ -132,6 +146,12 @@ class UpdatePushIdRequest(BaseModel):
     new_push_token: str
     new_platform: str
     device_credential: str
+    lang: str | None = Field(default=None, description="'en' (default) or 'de': language of the push text")
+
+    @field_validator("lang", mode="before")
+    @classmethod
+    def validate_lang(cls, v):
+        return normalize_lang(v)
 
     @field_validator("old_push_id_hash", "new_push_id_hash")
     @classmethod

@@ -101,7 +101,7 @@ def test_the_push_carries_no_ciphertext(client, monkeypatch):
 
     from app.services import push
 
-    assert list(inspect.signature(push.send_push).parameters) == ["push_token", "platform"]
+    assert list(inspect.signature(push.send_push).parameters) == ["push_token", "platform", "lang"]
 
 
 def test_apns_failure_logs_apples_reason_word_only(monkeypatch, caplog):

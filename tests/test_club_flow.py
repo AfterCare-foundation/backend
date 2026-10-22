@@ -54,7 +54,7 @@ def _answering_push(monkeypatch, answer):
     """Replace the push with one that answers `answer(push_token)` and records the calls."""
     calls = []
 
-    async def fake(push_token, platform):
+    async def fake(push_token, platform, lang="en"):
         calls.append(push_token)
         return answer(push_token)
 

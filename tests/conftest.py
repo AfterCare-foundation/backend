@@ -54,8 +54,8 @@ def sent(monkeypatch):
 
     calls = []
 
-    async def fake(push_token, platform):
-        calls.append({"push_token": push_token, "platform": platform})
+    async def fake(push_token, platform, lang="en"):
+        calls.append({"push_token": push_token, "platform": platform, "lang": lang})
         return PUSH_OK
 
     monkeypatch.setattr("app.services.notify_flow.send_push", fake)
@@ -63,13 +63,14 @@ def sent(monkeypatch):
     return calls
 
 
-def subscribe(client, *, device: str, card: str, platform: str = "ios"):
+def subscribe(client, *, device: str, card: str, platform: str = "ios", **extra):
     body = {
         "et_hash": sha256_hex(f"card:{card}"),
         "push_id_hash": sha256_hex(f"push:{device}"),
         "push_token": f"push-token-{device}",
         "platform": platform,
         "device_credential": sha256_hex(f"secret:{device}"),
+        **extra,
     }
     response = client.post("/subscribe", json=body)
     assert response.status_code == 200, response.text

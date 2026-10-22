@@ -68,10 +68,11 @@ async def run_deliveries(
     for item in todo:
         recipients_of.append(await conn.fetch(
             """
-            SELECT push_id_hash, push_token, platform, dead_since
-            FROM token_subscriptions
-            WHERE et_hash = $1
-              AND push_id_hash != $2
+            SELECT s.push_id_hash, s.push_token, s.platform, s.dead_since, d.lang
+            FROM token_subscriptions s
+            JOIN devices d ON d.push_id_hash = s.push_id_hash
+            WHERE s.et_hash = $1
+              AND s.push_id_hash != $2
             """,
             item.et_hash,
             sender_push_id_hash,
@@ -98,7 +99,7 @@ async def run_deliveries(
         if recipient["dead_since"] is not None:
             woken[device] = False  # the provider already refused this token
             continue
-        result = await send_push(recipient["push_token"], recipient["platform"])
+        result = await send_push(recipient["push_token"], recipient["platform"], lang=recipient["lang"])
         if result == PUSH_DEAD_TOKEN:
             await mark_dead(conn, device, recipient["push_token"])
         if result == PUSH_OK:

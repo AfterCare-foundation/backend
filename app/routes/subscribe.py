@@ -27,6 +27,11 @@ async def subscribe(body: SubscribeRequest, conn: asyncpg.Connection = Depends(g
     photographed cards (429).
     """
     await register_or_verify_device(conn, body.push_id_hash, body.device_credential)
+    if body.lang is not None:
+        await conn.execute(
+            "UPDATE devices SET lang = $1 WHERE push_id_hash = $2",
+            body.lang, body.push_id_hash,
+        )
 
     async with conn.transaction():
         # Serialise scans of the same code, so two simultaneous scans

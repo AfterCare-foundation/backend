@@ -154,7 +154,7 @@ All hashes are **64 lowercase hex characters** (SHA-256).
 }
 ```
 
-`platform` on subscribe is `ios` or `android`.
+`platform` on subscribe is `ios` or `android`. Optional `lang` (`en` default, or `de`) on `/subscribe` and `/update-push-id` sets the language of the wake-up push text (title "AfterCare"); any other value means English. Omitting it keeps the stored language.
 
 ---
 
@@ -165,7 +165,7 @@ app/main.py              FastAPI app, logging, no access log
 app/routes/              HTTP handlers
 app/services/            Device proof, rate limits, notify flow, push (stub/APNs/FCM)
 app/cron.py              Wake-up retries + daily cleanup
-migrations/                SQL, applied in order (001 schema, 002 drops campaign_contacts, 003 dead_since, 004 mailbox)
+migrations/                SQL, applied in order (001 schema, 002 drops campaign_contacts, 003 dead_since, 004 mailbox, 005 device lang)
 docs/CRYPTO.md           What the app must do so both sides agree (hashing, encryption)
 pyproject.toml, uv.lock  Dependencies (ranges) and the exact pinned versions
 ```
