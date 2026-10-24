@@ -134,7 +134,7 @@ All hashes are **64 lowercase hex characters** (SHA-256).
 |---|---|---|
 | `GET` | `/health` | Liveness |
 | `POST` | `/subscribe` | Register this device on a scanned card. A code holds at most 2 devices; a third gets `409 code_in_use`. A device can add at most 30 new codes per UTC day, then `429` |
-| `DELETE` | `/subscribe` | Erase this device (GDPR) |
+| `DELETE` | `/subscribe` | Erase this device (GDPR). Its codes are also closed for good (`burned_codes`, card hash only), so nobody new can take the freed slot; the other phone can still re-scan. Closed codes are forgotten after `SUBSCRIPTION_TTL_DAYS` |
 | `POST` | `/notify` | Store notifications in the contacts' mailboxes and wake their phones, immediately |
 | `POST` | `/inbox` | Messages waiting for this device: `{"notifications": [{"id", "enc"}]}`, oldest first, at most 200. Deletes nothing |
 | `POST` | `/inbox/confirm` | `{push_id_hash, device_credential, ids: [...]}`: delete the messages the app has safely stored |
@@ -165,7 +165,7 @@ app/main.py              FastAPI app, logging, no access log
 app/routes/              HTTP handlers
 app/services/            Device proof, rate limits, notify flow, push (stub/APNs/FCM)
 app/cron.py              Wake-up retries + daily cleanup
-migrations/                SQL, applied in order (001 schema, 002 drops campaign_contacts, 003 dead_since, 004 mailbox, 005 device lang)
+migrations/                SQL, applied in order (001 schema, 002 drops campaign_contacts, 003 dead_since, 004 mailbox, 005 device lang, 006 burned codes)
 docs/CRYPTO.md           What the app must do so both sides agree (hashing, encryption)
 pyproject.toml, uv.lock  Dependencies (ranges) and the exact pinned versions
 ```

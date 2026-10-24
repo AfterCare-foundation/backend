@@ -41,6 +41,17 @@ async def subscribe(body: SubscribeRequest, conn: asyncpg.Connection = Depends(g
             body.et_hash,
         )
 
+        # A code closed by someone's "delete all my data" takes nobody new.
+        # Phones already on it can still re-scan it. The answer is the same
+        # as for a full code, so it does not tell an outsider which is which.
+        burned = await conn.fetchval("SELECT 1 FROM burned_codes WHERE et_hash = $1", body.et_hash)
+        if burned and not await conn.fetchval(
+            "SELECT 1 FROM token_subscriptions WHERE et_hash = $1 AND push_id_hash = $2",
+            body.et_hash,
+            body.push_id_hash,
+        ):
+            raise HTTPException(status_code=409, detail="code_in_use")
+
         # Other devices already on this code (the caller does not count,
         # so re-scanning your own code always works).
         others = await conn.fetchval(
@@ -102,21 +113,32 @@ async def delete_subscription(
     """GDPR Art. 17 — delete everything for this device."""
     await verify_device(conn, body.push_id_hash, body.device_credential)
 
-    await conn.execute(
-        "DELETE FROM token_subscriptions WHERE push_id_hash = $1",
-        body.push_id_hash,
-    )
-    await conn.execute(
-        "DELETE FROM mailbox WHERE push_id_hash = $1",
-        body.push_id_hash,
-    )
-    await conn.execute(
-        "DELETE FROM notification_campaigns WHERE push_id_hash = $1",
-        body.push_id_hash,
-    )
-    await conn.execute(
-        "DELETE FROM devices WHERE push_id_hash = $1",
-        body.push_id_hash,
-    )
+    async with conn.transaction():
+        # Close every code this device was on, so the freed slot cannot be
+        # taken by someone who holds a photo of the card.
+        await conn.execute(
+            """
+            INSERT INTO burned_codes (et_hash)
+            SELECT et_hash FROM token_subscriptions WHERE push_id_hash = $1
+            ON CONFLICT (et_hash) DO NOTHING
+            """,
+            body.push_id_hash,
+        )
+        await conn.execute(
+            "DELETE FROM token_subscriptions WHERE push_id_hash = $1",
+            body.push_id_hash,
+        )
+        await conn.execute(
+            "DELETE FROM mailbox WHERE push_id_hash = $1",
+            body.push_id_hash,
+        )
+        await conn.execute(
+            "DELETE FROM notification_campaigns WHERE push_id_hash = $1",
+            body.push_id_hash,
+        )
+        await conn.execute(
+            "DELETE FROM devices WHERE push_id_hash = $1",
+            body.push_id_hash,
+        )
 
     return {"status": "ok"}

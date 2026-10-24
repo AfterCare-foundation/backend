@@ -77,6 +77,9 @@ async def cleanup_expired_subscriptions():
             if int(deleted) > 0:
                 logger.info("TTL cleanup: deleted %s expired subscription(s)", deleted)
 
+            # Burned codes: by now the other holder's subscription has expired too.
+            await conn.execute("DELETE FROM burned_codes WHERE burned_date < $1", cutoff)
+
             # Tokens the provider reported dead and the app never fixed.
             dead_cutoff = datetime.now(timezone.utc).date() - timedelta(days=settings.dead_token_grace_days)
             result = await conn.execute(
