@@ -48,13 +48,20 @@ async def run_deliveries(
             detail=f"A campaign can notify at most {settings.notify_max_contacts_per_campaign} contacts",
         )
 
-    # Step 1: validate EVERY item before sending anything.
-    # A bad item rejects the whole request and nothing goes out.
+    # Step 1: keep the deliveries for codes the sender is on. A code the sender
+    # is not (or no longer) on is skipped and reported, so one stale code never
+    # blocks the others. Only the sender's own codes are mentioned.
     todo = []
+    skipped = []
     for item in deliveries:
-        if not await sender_is_subscribed(conn, item.et_hash, sender_push_id_hash):
-            raise HTTPException(status_code=403, detail="Not a subscriber of this connection")
-        todo.append(item)
+        if await sender_is_subscribed(conn, item.et_hash, sender_push_id_hash):
+            todo.append(item)
+        else:
+            skipped.append({"et_hash": item.et_hash, "reason": "not_subscribed"})
+
+    if not todo:
+        # Nothing valid: the campaign id is not used up.
+        return {"status": "ok", "pushed": 0, "retrying": 0, "contacts": 0, "skipped": skipped}
 
     # A campaign_id works once: this also stops a resent request from
     # pushing to the same contacts twice. Released below if nothing is sent.
@@ -120,7 +127,9 @@ async def run_deliveries(
     handled = 0
     for i, item in enumerate(todo):
         if not recipients_of[i]:
-            continue  # nobody else on this code yet
+            # nobody else on this code yet
+            skipped.append({"et_hash": item.et_hash, "reason": "no_recipient"})
+            continue
         if not all(woken[r["push_id_hash"]] for r in recipients_of[i]):
             retrying += 1
         handled += 1
@@ -137,4 +146,6 @@ async def run_deliveries(
         "pushed": pushed,      # devices whose lock-screen push was accepted
         "retrying": retrying,  # contacts whose push failed; the message is safe in the mailbox
         "contacts": handled,
+        # Codes nothing was sent for: {"et_hash", "reason": "not_subscribed" | "no_recipient"}
+        "skipped": skipped,
     }

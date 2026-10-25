@@ -24,7 +24,7 @@ Sauna wristband pairing, CAPTCHA, and anomaly detection are not in this codebase
 | Each notification's encrypted bytes, filed under the **recipient device** with a date only, until the app collects it or `MAILBOX_TTL_DAYS` (30) pass | Plaintext STI type, the card hash or the sender of a waiting message |
 | Anonymous **daily counts** for reporting (`daily_stats`: a date, a metric name and a number, e.g. `pairings_completed`), kept after the 180-day cleanup | Anything that identifies a device, card, person, STI type or place |
 
-A subscription whose push token Apple or Google report as dead (app uninstalled, token replaced) is marked, and deleted after **30 days** (`DEAD_TOKEN_GRACE_DAYS`, so a phone restored from a backup has time to send its new token) unless the app sends a fresh token first (`/update-push-id` or a re-scan). This also frees the slot on that code. Waiting messages do not depend on the token: they stay in the mailbox either way.
+A subscription whose push token Apple or Google report as dead (app uninstalled, token replaced) is marked, and the **token is erased after 30 days** (`DEAD_TOKEN_GRACE_DAYS`) unless the app sends a fresh one first (`/update-push-id` or a re-scan). The subscription itself stays until its normal 180-day end, so a returning device moves back with `/update-push-id`, keeps its original date, and needs no re-join. The code stays occupied meanwhile, so nobody else can take the slot. Waiting messages do not depend on the token: they stay in the mailbox either way.
 
 Subscriptions expire after **180 days** (`SUBSCRIPTION_TTL_DAYS`) and are deleted automatically. The clock starts at the first scan and a re-scan does not extend it. The value is a single setting, so it is easy to change; a change applies to existing rows too, because expiry is `created_date` plus this number.
 
@@ -47,10 +47,10 @@ Each card has its own token, so the app encrypts the STI type **once per contact
 
 ### Notify rules
 
-- The whole request is validated first. One bad item (for example a code the sender is not subscribed to) rejects everything and nothing is sent.
+- A code the sender is not subscribed to is skipped and reported in `skipped`; the other deliveries go out. A malformed request, a bad credential, too many contacts or a reused campaign id still reject the whole request. If no delivery is valid, the campaign id is not used up.
 - One person reached through several of the sender's codes gets **one** push, and every ciphertext lands in their mailbox; the app decrypts all and shows each STI once. The server never drops a delivery, because it cannot see the STI type.
 - A code connects at most **2 devices**, once. A third device is refused at subscribe time.
-- Response: `{"status": "ok", "pushed": n, "retrying": n, "contacts": n}`.
+- Response: `{"status": "ok", "pushed": n, "retrying": n, "contacts": n, "skipped": [{"et_hash": "...", "reason": "not_subscribed" | "no_recipient"}]}`. `skipped` only names the sender's own codes (`not_subscribed`: the sender is not on it; `no_recipient`: nobody else is on it yet).
 
 ### Notify limits (per device)
 
@@ -106,10 +106,10 @@ See `.env.example`. Important flags:
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_PRODUCTION` | Apple push settings. `APNS_PRODUCTION=true` for TestFlight and App Store builds. |
 | `APNS_KEY` / `APNS_KEY_FILE` | The `.p8` key: its text in `APNS_KEY` (for hosts without secret files), or a file path. Never commit it. |
 | `MAILBOX_TTL_DAYS` | Days a notification waits for the app to fetch it (default 30). |
-| `RUN_BACKGROUND_JOBS` | Wake-up retries (every 15 minutes) and the daily cleanup in this process. Cleanup deletes expired subscriptions (`SUBSCRIPTION_TTL_DAYS`), long-dead tokens and unfetched mailbox messages (`MAILBOX_TTL_DAYS`). |
+| `RUN_BACKGROUND_JOBS` | Wake-up retries (every 15 minutes) and the daily cleanup in this process. Cleanup deletes expired subscriptions (`SUBSCRIPTION_TTL_DAYS`), erases long-dead push tokens and deletes unfetched mailbox messages (`MAILBOX_TTL_DAYS`). |
 | `SUBSCRIPTION_TTL_DAYS` | Days a card scan is kept (default 180). |
 | `MAX_SUBSCRIPTIONS_PER_DAY` | New connections one device may add per UTC day (default 30). |
-| `DEAD_TOKEN_GRACE_DAYS` | Days a subscription with a dead push token is kept (default 30). |
+| `DEAD_TOKEN_GRACE_DAYS` | Days a dead push token is kept before it is erased (default 30). The subscription stays until `SUBSCRIPTION_TTL_DAYS`. |
 | `NOTIFY_MAX_CAMPAIGNS_PER_DAY` | Campaigns per rolling 24 hours (default 3). |
 | `NOTIFY_MAX_CAMPAIGNS`, `NOTIFY_RATE_LIMIT_DAYS` | Campaigns per rolling window (default 6 per 30 days). |
 | `NOTIFY_MAX_CONTACTS_PER_CAMPAIGN` | Contacts per Notify tap (default 100). |

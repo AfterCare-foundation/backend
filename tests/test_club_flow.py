@@ -86,10 +86,19 @@ def test_cannot_notify_card_you_did_not_scan(client, sent):
     subscribe(client, device="alice", card="pink")
     subscribe(client, device="bob", card="blue")
 
-    response, _ = notify(client, device="alice", card="blue")
-    assert response.status_code == 403
+    campaign = str(uuid4())
+    response, _ = notify(client, device="alice", card="blue", campaign_id=campaign)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["contacts"] == 0 and body["pushed"] == 0
+    assert body["skipped"] == [{"et_hash": sha256_hex("card:blue"), "reason": "not_subscribed"}]
     assert sent == []
     assert waiting(client, device="bob") == []
+
+    # Nothing valid was sent, so the campaign id is not used up.
+    again, _ = notify(client, device="alice", card="pink", campaign_id=campaign)
+    assert again.status_code == 200  # not 409 campaign_already_used
+    assert again.json()["skipped"] == [{"et_hash": sha256_hex("card:pink"), "reason": "no_recipient"}]
 
 
 def test_wrong_device_credential_rejected(client):
@@ -246,16 +255,38 @@ def test_reinstalled_phone_keeps_its_slot_and_its_messages_via_update_push_id(cl
     assert [n["enc"] for n in inbox.json()["notifications"]] == ["ciphertext-for-pink"]
 
 
-def test_bad_item_rejects_whole_request_and_sends_nothing(client, sent):
+def test_a_stale_code_is_skipped_and_the_others_are_delivered(client, sent):
     _three_contacts(client)
     subscribe(client, device="erin", card="stranger")  # alice is not on this code
 
     response = _multi_notify(
         client, device="alice", cards=["pink", "stranger", "blue"], campaign_id=str(uuid4())
     )
-    assert response.status_code == 403
-    assert sent == []  # not even the valid first contact
-    assert waiting(client, device="bob") == []
+    assert response.status_code == 200
+    body = response.json()
+    assert body["contacts"] == 2
+    assert body["skipped"] == [{"et_hash": sha256_hex("card:stranger"), "reason": "not_subscribed"}]
+    assert sorted(c["push_token"] for c in sent) == ["push-token-bob", "push-token-dan"]
+    assert waiting(client, device="bob") == ["ciphertext-for-pink"]
+    assert waiting(client, device="erin") == []  # the skipped code got nothing
+
+
+def test_a_code_nobody_else_is_on_is_reported_as_no_recipient(client, sent):
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+    subscribe(client, device="alice", card="lonely")
+
+    response = _multi_notify(client, device="alice", cards=["pink", "lonely"], campaign_id=str(uuid4()))
+    body = response.json()
+    assert body["contacts"] == 1
+    assert body["skipped"] == [{"et_hash": sha256_hex("card:lonely"), "reason": "no_recipient"}]
+
+
+def test_skipped_is_empty_when_everything_was_delivered(client, sent):
+    subscribe(client, device="alice", card="pink")
+    subscribe(client, device="bob", card="pink")
+    response, _ = notify(client, device="alice", card="pink")
+    assert response.json()["skipped"] == []
 
 
 def test_one_failed_push_does_not_stop_the_rest_and_the_server_retries_it(client, monkeypatch):
@@ -410,7 +441,7 @@ def test_dispatcher_stops_retrying_a_wake_up_after_about_a_day(client, monkeypat
     assert waiting(client, device="bob") == ["ciphertext-for-pink"]  # still collectable
 
 
-def test_cleanup_removes_long_dead_subscriptions_and_frees_the_slot(client):
+def test_cleanup_wipes_long_dead_tokens_but_keeps_the_subscription_and_the_slot(client):
     from app.cron import cleanup_expired_subscriptions
 
     subscribe(client, device="alice", card="pink")
@@ -422,11 +453,43 @@ def test_cleanup_removes_long_dead_subscriptions_and_frees_the_slot(client):
 
     client.portal.call(cleanup_expired_subscriptions)
 
-    left = set(_sql("SELECT push_id_hash FROM token_subscriptions").split())
-    assert bob not in left            # dead 40 days: gone
-    assert cara in left               # dead 3 days: still within the grace period
+    assert _sql(f"SELECT push_token FROM token_subscriptions WHERE push_id_hash = '{bob}'") == ""
+    assert _sql(f"SELECT push_token FROM token_subscriptions WHERE push_id_hash = '{cara}'") == "push-token-cara"
+    assert _sql("SELECT COUNT(*) FROM token_subscriptions") == "3"  # nothing deleted
 
-    subscribe(client, device="dan", card="pink")  # the freed slot can be used
+    # The slot stays taken: a stranger with the card cannot join.
+    subscribe_response = client.post("/subscribe", json={
+        "et_hash": sha256_hex("card:pink"), "push_id_hash": sha256_hex("push:dan"),
+        "push_token": "push-token-dan", "platform": "ios", "device_credential": sha256_hex("secret:dan"),
+    })
+    assert subscribe_response.status_code == 409
+    assert subscribe_response.json()["detail"] == "code_in_use"
+
+
+def test_a_dead_device_moves_back_with_update_push_id_and_keeps_its_date(client):
+    from app.cron import cleanup_expired_subscriptions
+
+    body = subscribe(client, device="bob", card="pink")
+    subscribe(client, device="alice", card="pink")
+    bob = sha256_hex("push:bob")
+    _sql(f"UPDATE token_subscriptions SET dead_since = CURRENT_DATE - 40, created_date = CURRENT_DATE - 100 "
+         f"WHERE push_id_hash = '{bob}'")
+    client.portal.call(cleanup_expired_subscriptions)
+
+    response = client.post("/update-push-id", json={
+        "old_push_id_hash": body["push_id_hash"],
+        "new_push_id_hash": sha256_hex("push:bob-new"),
+        "new_push_token": "fresh-token",
+        "new_platform": "ios",
+        "device_credential": body["device_credential"],
+    })
+    assert response.status_code == 200
+
+    new = sha256_hex("push:bob-new")
+    row = _sql(f"SELECT push_token, dead_since IS NULL, created_date = CURRENT_DATE - 100 "
+               f"FROM token_subscriptions WHERE push_id_hash = '{new}'")
+    assert row == "fresh-token|t|t"  # token restored, mark cleared, original date kept
+    assert _sql(f"SELECT COUNT(*) FROM token_subscriptions WHERE push_id_hash = '{bob}'") == "0"
 
 
 def test_a_device_can_add_at_most_30_new_connections_per_day(client):

@@ -28,7 +28,7 @@ PUSHES_FAILED = "pushes_failed"
 PUSHES_DEAD = "pushes_dead"                      # provider said the token is gone
 DELETE_REQUESTS = "delete_requests"              # "delete my data"
 SUBSCRIPTIONS_EXPIRED = "subscriptions_expired"  # reached the 180-day limit
-SUBSCRIPTIONS_DEAD_REMOVED = "subscriptions_dead_removed"
+TOKENS_WIPED = "tokens_wiped"                    # dead push tokens erased (subscription kept)
 
 # Snapshots (the day's value is set, not added to)
 ACTIVE_CODES = "active_codes"

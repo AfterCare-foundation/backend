@@ -19,7 +19,7 @@ Hex means **lowercase**, no `0x`, no colons.
 | `device_credential` | 32 random bytes as 64 hex. Create once, store in Keychain / Keystore. Send the hex secret; the server stores `SHA-256(those 32 bytes)`. |
 | `platform` | `ios` or `android` |
 | `lang` | Optional on `/subscribe` and `/update-push-id`: `en` (default) or `de`, the language of the push text. Anything else means `en`. Not returned by any endpoint. |
-| `campaign_id` | New UUID per tap of Notify, sent in ONE request. An id can be used once (`409 campaign_already_used` if repeated). Never retry a failed push yourself: the server retries a failed wake-up push for about a day. The message itself is already safe in the recipient's mailbox for 30 days, whatever happens to the push (`retrying` in the response says how many contacts have not been woken yet). If `pushed` and `retrying` are both 0 (nobody else on the codes yet), the same id may be reused. |
+| `campaign_id` | New UUID per tap of Notify, sent in ONE request. An id can be used once (`409 campaign_already_used` if repeated). Never retry a failed push yourself: the server retries a failed wake-up push for about a day. The message itself is already safe in the recipient's mailbox for 30 days, whatever happens to the push (`retrying` in the response says how many contacts have not been woken yet). If `contacts` is 0 (every code skipped, or nobody else on the codes yet), the same id may be reused. |
 | `encrypted_payload` | Per card. See §2. |
 
 Do not send the raw `TOKEN` to the server.
@@ -80,4 +80,4 @@ The push does **not** carry the ciphertext (no `enc`, no `more`). It only wakes 
 }
 ```
 
-Every notification is sent immediately. There is no scheduling: when a test is reliable again is a clinical question that the recipient's clinic answers, so the server has no timing logic. A delivery with a `scheduled_at` (or any other unknown field) is rejected with `422`. Response: `{"status": "ok", "pushed": n, "retrying": n, "contacts": n}`.
+Every notification is sent immediately. There is no scheduling: when a test is reliable again is a clinical question that the recipient's clinic answers, so the server has no timing logic. A delivery with a `scheduled_at` (or any other unknown field) is rejected with `422`. Response: `{"status": "ok", "pushed": n, "retrying": n, "contacts": n, "skipped": [{"et_hash": "...", "reason": "not_subscribed" | "no_recipient"}]}`. Deliveries for codes the sender is not subscribed to are skipped, not rejected; the rest go out.

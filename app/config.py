@@ -35,8 +35,9 @@ class Settings(BaseSettings):
     # for chlamydia). Applies to existing rows too: expiry is created_date + this.
     subscription_ttl_days: int = 180
 
-    # A subscription whose push token the provider reports as dead is removed
-    # after this many days, unless the app fixes the token first.
+    # A push token the provider reports as dead is erased after this many days,
+    # unless the app fixes it first. The subscription itself stays until its
+    # normal end (SUBSCRIPTION_TTL_DAYS), so the device can move back to it.
     dead_token_grace_days: int = 30
 
     # New connections (card scans) one device may add per UTC day.

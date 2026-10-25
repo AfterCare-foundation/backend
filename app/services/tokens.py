@@ -3,7 +3,8 @@
 # Dead push tokens. When APNs/FCM says a token will never work again (app
 # uninstalled, token replaced), we do not delete at once: the app fixes the
 # token on its next launch via /update-push-id or /subscribe, which clears the
-# mark. Cleanup removes subscriptions that stay dead past the grace period.
+# mark. Cleanup erases the token of subscriptions that stay dead past the grace
+# period, but keeps the subscription until its normal 180-day end.
 
 import asyncpg
 

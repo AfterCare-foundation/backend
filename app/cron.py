@@ -88,16 +88,21 @@ async def cleanup_expired_subscriptions():
             # Burned codes: by now the other holder's subscription has expired too.
             await conn.execute("DELETE FROM burned_codes WHERE burned_date < $1", cutoff)
 
-            # Tokens the provider reported dead and the app never fixed.
+            # Tokens the provider reported dead and the app never fixed: wipe the
+            # token but keep the subscription until its normal 180-day end, so the
+            # device moves back with /update-push-id and the code stays occupied.
             dead_cutoff = datetime.now(timezone.utc).date() - timedelta(days=settings.dead_token_grace_days)
             result = await conn.execute(
-                "DELETE FROM token_subscriptions WHERE dead_since IS NOT NULL AND dead_since < $1",
+                """
+                UPDATE token_subscriptions SET push_token = ''
+                WHERE dead_since IS NOT NULL AND dead_since < $1 AND push_token <> ''
+                """,
                 dead_cutoff,
             )
-            dead_deleted = result.split()[-1]
-            if int(dead_deleted) > 0:
-                logger.info("Dead-token cleanup: deleted %s subscription(s)", dead_deleted)
-            await stats.bump(conn, stats.SUBSCRIPTIONS_DEAD_REMOVED, int(dead_deleted))
+            wiped = result.split()[-1]
+            if int(wiped) > 0:
+                logger.info("Dead-token cleanup: wiped %s token(s)", wiped)
+            await stats.bump(conn, stats.TOKENS_WIPED, int(wiped))
 
             # Messages nobody fetched in time.
             result = await conn.execute(
