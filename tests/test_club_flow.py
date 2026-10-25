@@ -95,10 +95,12 @@ def test_cannot_notify_card_you_did_not_scan(client, sent):
     assert sent == []
     assert waiting(client, device="bob") == []
 
-    # Nothing valid was sent, so the campaign id is not used up.
+    # An attempt that reaches nobody still uses the campaign: the id is gone
+    # and one slot of the budget is spent.
     again, _ = notify(client, device="alice", card="pink", campaign_id=campaign)
-    assert again.status_code == 200  # not 409 campaign_already_used
-    assert again.json()["skipped"] == [{"et_hash": sha256_hex("card:pink"), "reason": "no_recipient"}]
+    assert again.status_code == 409
+    assert again.json()["detail"] == "campaign_already_used"
+    assert _sql("SELECT COUNT(*) FROM notification_campaigns") == "1"
 
 
 def test_wrong_device_credential_rejected(client):
@@ -511,3 +513,15 @@ def test_a_device_can_add_at_most_30_new_connections_per_day(client):
 
     subscribe(client, device="busy", card="card-0")   # re-scanning a code it already has is fine
     subscribe(client, device="other", card="card-30")  # other devices are unaffected
+
+
+def test_attempts_that_reach_nobody_use_the_same_campaign_budget(client, sent):
+    subscribe(client, device="alice", card="lonely")
+
+    for _ in range(3):  # 3 campaigns per day, none of them reaches anybody
+        response = _multi_notify(client, device="alice", cards=["lonely"], campaign_id=str(uuid4()))
+        assert response.status_code == 200
+        assert response.json()["contacts"] == 0
+    fourth = _multi_notify(client, device="alice", cards=["lonely"], campaign_id=str(uuid4()))
+    assert fourth.status_code == 429
+    assert _sql("SELECT COUNT(*) FROM notification_campaigns") == "3"

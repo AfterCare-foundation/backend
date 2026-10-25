@@ -47,7 +47,7 @@ Each card has its own token, so the app encrypts the STI type **once per contact
 
 ### Notify rules
 
-- A code the sender is not subscribed to is skipped and reported in `skipped`; the other deliveries go out. A malformed request, a bad credential, too many contacts or a reused campaign id still reject the whole request. If no delivery is valid, the campaign id is not used up.
+- A code the sender is not subscribed to is skipped and reported in `skipped`; the other deliveries go out. A malformed request, a bad credential, too many contacts or a reused campaign id still reject the whole request. Every attempt uses the campaign id and one slot of the budget (3 per 24 hours, 6 per 30 days), even one that reaches nobody, so repeated empty attempts hit the same limits.
 - One person reached through several of the sender's codes gets **one** push, and every ciphertext lands in their mailbox; the app decrypts all and shows each STI once. The server never drops a delivery, because it cannot see the STI type.
 - A code connects at most **2 devices**, once. A third device is refused at subscribe time.
 - Response: `{"status": "ok", "pushed": n, "retrying": n, "contacts": n, "skipped": [{"et_hash": "...", "reason": "not_subscribed" | "no_recipient"}]}`. `skipped` only names the sender's own codes (`not_subscribed`: the sender is not on it; `no_recipient`: nobody else is on it yet).

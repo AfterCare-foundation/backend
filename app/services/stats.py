@@ -21,6 +21,7 @@ CODES_JOINED = "codes_joined"                    # a device joins a code
 PAIRINGS_COMPLETED = "pairings_completed"        # a code reaches its second device
 NOTIFY_TAPS = "notify_taps"                      # Notify taps that reached someone
 MESSAGES_SENT = "messages_sent"                  # messages put in mailboxes
+DELIVERIES_NO_RECIPIENT = "deliveries_no_recipient"  # Notify for a code nobody else is on yet
 MESSAGES_COLLECTED = "messages_collected"        # messages the app confirmed
 MESSAGES_EXPIRED = "messages_expired"            # messages nobody collected in time
 PUSHES_OK = "pushes_ok"

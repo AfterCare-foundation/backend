@@ -104,3 +104,13 @@ def test_a_stats_failure_never_breaks_the_request(client, sent):
         assert waiting(client, device="bob") == ["ciphertext-for-pink"]
     finally:
         _sql("ALTER TABLE daily_stats_off RENAME TO daily_stats")
+
+
+def test_deliveries_with_nobody_on_the_code_are_counted(client, sent):
+    subscribe(client, device="alice", card="lonely")
+    notify(client, device="alice", card="lonely")
+    notify(client, device="alice", card="lonely")
+
+    counts = _stats()
+    assert counts["deliveries_no_recipient"] == "2"
+    assert "notify_taps" not in counts

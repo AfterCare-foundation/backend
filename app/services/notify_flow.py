@@ -16,7 +16,7 @@ from app.config import settings
 from app.services import stats
 from app.services.devices import verify_device
 from app.services.push import PUSH_DEAD_TOKEN, PUSH_OK, send_push
-from app.services.rate_limit import claim_campaign, release_campaign
+from app.services.rate_limit import claim_campaign
 from app.services.tokens import mark_dead
 
 async def sender_is_subscribed(conn: asyncpg.Connection, et_hash: str, sender_push_id_hash: str) -> bool:
@@ -59,12 +59,10 @@ async def run_deliveries(
         else:
             skipped.append({"et_hash": item.et_hash, "reason": "not_subscribed"})
 
-    if not todo:
-        # Nothing valid: the campaign id is not used up.
-        return {"status": "ok", "pushed": 0, "retrying": 0, "contacts": 0, "skipped": skipped}
-
-    # A campaign_id works once: this also stops a resent request from
-    # pushing to the same contacts twice. Released below if nothing is sent.
+    # Every attempt uses the campaign budget, even one that reaches nobody, so
+    # repeated empty attempts hit the same limits (3 per day, 6 per 30 days).
+    # A campaign_id also works once: this stops a resent request from pushing
+    # to the same contacts twice.
     await claim_campaign(conn, sender_push_id_hash, campaign_id)
 
     # Step 2: look up who receives each contact.
@@ -72,9 +70,10 @@ async def run_deliveries(
     # codes), possibly with a different STI each time. The server cannot see the
     # STI, so it never drops a delivery: every ciphertext goes into the mailbox
     # and the device is woken ONCE.
-    recipients_of = []
+    reached = []        # deliveries somebody else is on
+    recipients_of = []  # their recipients, in the same order
     for item in todo:
-        recipients_of.append(await conn.fetch(
+        recipients = await conn.fetch(
             """
             SELECT s.push_id_hash, s.push_token, s.platform, s.dead_since, d.lang
             FROM token_subscriptions s
@@ -84,7 +83,18 @@ async def run_deliveries(
             """,
             item.et_hash,
             sender_push_id_hash,
-        ))
+        )
+        if recipients:
+            reached.append(item)
+            recipients_of.append(recipients)
+        else:
+            skipped.append({"et_hash": item.et_hash, "reason": "no_recipient"})
+            await stats.bump(conn, stats.DELIVERIES_NO_RECIPIENT)
+    todo = reached
+
+    if not todo:
+        # Nothing was sent. The campaign stays used up (see above).
+        return {"status": "ok", "pushed": 0, "retrying": 0, "contacts": 0, "skipped": skipped}
 
     # Step 3: store every message in the recipient's mailbox (all or nothing).
     # From here on nothing can be lost, whatever happens to the push.
@@ -123,23 +133,12 @@ async def run_deliveries(
         woken[device] = result == PUSH_OK
 
     pushed = sum(woken.values())
-    retrying = 0
-    handled = 0
-    for i, item in enumerate(todo):
-        if not recipients_of[i]:
-            # nobody else on this code yet
-            skipped.append({"et_hash": item.et_hash, "reason": "no_recipient"})
-            continue
-        if not all(woken[r["push_id_hash"]] for r in recipients_of[i]):
-            retrying += 1
-        handled += 1
-
-    if handled == 0:
-        # Nobody on the codes yet: do not use up a slot,
-        # and let the app retry with the same id.
-        await release_campaign(conn, campaign_id)
-    else:
-        await stats.bump(conn, stats.NOTIFY_TAPS)
+    retrying = sum(
+        1 for recipients in recipients_of
+        if not all(woken[r["push_id_hash"]] for r in recipients)
+    )
+    handled = len(todo)
+    await stats.bump(conn, stats.NOTIFY_TAPS)
 
     return {
         "status": "ok",

@@ -2,7 +2,7 @@
 #
 # Two caps on new campaigns:
 #   - at most 3 campaigns per rolling 24 hours (one run per infection, a few per sitting)
-#   - at most 4 campaigns per rolling 30 days (the total limit)
+#   - at most 6 campaigns per rolling 30 days (the total limit)
 # The server never learns which infection a campaign is about.
 
 # A campaign_id can be used ONCE. A second request with the same id is
@@ -21,8 +21,8 @@ from app.config import settings
 async def claim_campaign(conn: asyncpg.Connection, push_id_hash: str, campaign_id: UUID) -> None:
     """
     Check the limits and reserve this campaign_id. Raises 409 if the id was
-    already used, 429 if a limit is reached. Call release_campaign() if
-    nothing ends up being sent, so a failed attempt does not use up a slot.
+    already used, 429 if a limit is reached. Every Notify attempt claims one,
+    including an attempt that ends up reaching nobody.
     """
     if await conn.fetchval(
         "SELECT 1 FROM notification_campaigns WHERE campaign_id = $1", campaign_id
@@ -72,7 +72,3 @@ async def claim_campaign(conn: asyncpg.Connection, push_id_hash: str, campaign_i
     if inserted is None:
         raise HTTPException(status_code=409, detail="campaign_already_used")
 
-
-async def release_campaign(conn: asyncpg.Connection, campaign_id: UUID) -> None:
-    """Nothing was sent or queued: give the slot (and the id) back."""
-    await conn.execute("DELETE FROM notification_campaigns WHERE campaign_id = $1", campaign_id)
