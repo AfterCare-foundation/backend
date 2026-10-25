@@ -29,7 +29,7 @@ def wipe_db():
             "-v", "ON_ERROR_STOP=1",
             "-c",
             """
-            TRUNCATE mailbox, burned_codes,
+            TRUNCATE mailbox, burned_codes, daily_stats,
                      notification_campaigns, token_subscriptions, devices
             CASCADE;
             """,

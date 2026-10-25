@@ -6,6 +6,7 @@ import asyncpg
 from app.config import settings
 from app.database import get_db
 from app.models import SubscribeRequest, DeleteSubscriptionRequest
+from app.services import stats
 from app.services.devices import register_or_verify_device, verify_device
 
 router = APIRouter()
@@ -102,6 +103,11 @@ async def subscribe(body: SubscribeRequest, conn: asyncpg.Connection = Depends(g
             body.platform,
         )
 
+        if not already_on_code:
+            await stats.bump(conn, stats.CODES_JOINED)
+            if others == 1:  # this device is the code's second one
+                await stats.bump(conn, stats.PAIRINGS_COMPLETED)
+
     return {"status": "ok"}
 
 
@@ -140,5 +146,6 @@ async def delete_subscription(
             "DELETE FROM devices WHERE push_id_hash = $1",
             body.push_id_hash,
         )
+        await stats.bump(conn, stats.DELETE_REQUESTS)
 
     return {"status": "ok"}

@@ -14,6 +14,7 @@ from fastapi import HTTPException
 import asyncpg
 
 from app.hashes import hash_device_credential
+from app.services import stats
 
 
 async def register_or_verify_device(
@@ -35,6 +36,7 @@ async def register_or_verify_device(
             push_id_hash,
             credential_hash,
         )
+        await stats.bump(conn, stats.DEVICES_NEW)
         return
 
     if existing["credential_hash"] != credential_hash:

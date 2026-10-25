@@ -13,6 +13,7 @@ import asyncpg
 
 from app.database import get_db
 from app.models import InboxConfirmRequest, InboxRequest
+from app.services import stats
 from app.services.devices import verify_device
 
 router = APIRouter()
@@ -47,4 +48,6 @@ async def confirm_inbox(body: InboxConfirmRequest, conn: asyncpg.Connection = De
         body.push_id_hash,
         body.ids,
     )
-    return {"status": "ok", "deleted": int(result.split()[-1])}
+    deleted = int(result.split()[-1])
+    await stats.bump(conn, stats.MESSAGES_COLLECTED, deleted)
+    return {"status": "ok", "deleted": deleted}

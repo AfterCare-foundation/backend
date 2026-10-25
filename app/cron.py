@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import app.database as database
 from app.config import settings
+from app.services import stats
 from app.services.push import PUSH_DEAD_TOKEN, PUSH_OK, send_push
 from app.services.tokens import mark_dead
 
@@ -51,6 +52,12 @@ async def dispatch_wakeups():
             logger.info("Retrying %s wake-up push(es)", len(devices))
             for d in devices:
                 result = await send_push(d["push_token"], d["platform"], lang=d["lang"])
+                await stats.bump(
+                    conn,
+                    stats.PUSHES_OK if result == PUSH_OK
+                    else stats.PUSHES_DEAD if result == PUSH_DEAD_TOKEN
+                    else stats.PUSHES_FAILED,
+                )
                 if result == PUSH_DEAD_TOKEN:
                     await mark_dead(conn, d["push_id_hash"], d["push_token"])
                 elif result == PUSH_OK:
@@ -76,6 +83,7 @@ async def cleanup_expired_subscriptions():
             deleted = result.split()[-1]
             if int(deleted) > 0:
                 logger.info("TTL cleanup: deleted %s expired subscription(s)", deleted)
+            await stats.bump(conn, stats.SUBSCRIPTIONS_EXPIRED, int(deleted))
 
             # Burned codes: by now the other holder's subscription has expired too.
             await conn.execute("DELETE FROM burned_codes WHERE burned_date < $1", cutoff)
@@ -89,12 +97,14 @@ async def cleanup_expired_subscriptions():
             dead_deleted = result.split()[-1]
             if int(dead_deleted) > 0:
                 logger.info("Dead-token cleanup: deleted %s subscription(s)", dead_deleted)
+            await stats.bump(conn, stats.SUBSCRIPTIONS_DEAD_REMOVED, int(dead_deleted))
 
             # Messages nobody fetched in time.
-            await conn.execute(
+            result = await conn.execute(
                 "DELETE FROM mailbox WHERE created_date < CURRENT_DATE - $1::int",
                 settings.mailbox_ttl_days,
             )
+            await stats.bump(conn, stats.MESSAGES_EXPIRED, int(result.split()[-1]))
 
             campaign_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.notify_rate_limit_days)  # campaigns only matter inside the rate-limit window
             await conn.execute(
@@ -112,6 +122,9 @@ async def cleanup_expired_subscriptions():
                 """,
                 cutoff,
             )
+
+            # Today's totals, taken after the cleanup.
+            await stats.record_snapshot(conn)
         finally:
             await conn.execute("SELECT pg_advisory_unlock($1)", LOCK_CLEANUP)
 

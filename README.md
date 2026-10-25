@@ -22,10 +22,13 @@ Sauna wristband pairing, CAPTCHA, and anomaly detection are not in this codebase
 | UTC **date** a card was scanned (`created_date`) | Encounter time |
 | Per Notify tap: `campaign_id`, sender device hash and the exact time, for rate limits (30 days) | Which contacts a campaign reached |
 | Each notification's encrypted bytes, filed under the **recipient device** with a date only, until the app collects it or `MAILBOX_TTL_DAYS` (30) pass | Plaintext STI type, the card hash or the sender of a waiting message |
+| Anonymous **daily counts** for reporting (`daily_stats`: a date, a metric name and a number, e.g. `pairings_completed`), kept after the 180-day cleanup | Anything that identifies a device, card, person, STI type or place |
 
 A subscription whose push token Apple or Google report as dead (app uninstalled, token replaced) is marked, and deleted after **30 days** (`DEAD_TOKEN_GRACE_DAYS`, so a phone restored from a backup has time to send its new token) unless the app sends a fresh token first (`/update-push-id` or a re-scan). This also frees the slot on that code. Waiting messages do not depend on the token: they stay in the mailbox either way.
 
 Subscriptions expire after **180 days** (`SUBSCRIPTION_TTL_DAYS`) and are deleted automatically. The clock starts at the first scan and a re-scan does not extend it. The value is a single setting, so it is easy to change; a change applies to existing rows too, because expiry is `created_date` plus this number.
+
+**Usage statistics.** Counters are bumped as things happen (new devices, codes joined, pairings completed, Notify taps, messages sent and collected, pushes ok/failed/dead, delete requests, expiries) and the daily cleanup job also records snapshots (active codes, active devices, waiting messages). Read them with SQL, for example monthly totals: `SELECT date_trunc('month', day) AS month, metric, SUM(value) FROM daily_stats GROUP BY 1, 2 ORDER BY 1, 2;` (use `MAX(value)` for the three snapshot metrics instead of `SUM`). A failure in counting is logged and never affects a request.
 
 The infection name (gonorrhoea, syphilis, HIV, Mpox, HPV, …) is chosen in the **app** at notify time. The card is not tied to an STI. The phone should encrypt that choice; the lock-screen text is always generic and the push carries **no ciphertext** (the app fetches its messages itself): *You have a new message. Open the app to read it.*
 
@@ -165,7 +168,7 @@ app/main.py              FastAPI app, logging, no access log
 app/routes/              HTTP handlers
 app/services/            Device proof, rate limits, notify flow, push (stub/APNs/FCM)
 app/cron.py              Wake-up retries + daily cleanup
-migrations/                SQL, applied in order (001 schema, 002 drops campaign_contacts, 003 dead_since, 004 mailbox, 005 device lang, 006 burned codes)
+migrations/                SQL, applied in order (001 schema, 002 drops campaign_contacts, 003 dead_since, 004 mailbox, 005 device lang, 006 burned codes, 007 daily stats)
 docs/CRYPTO.md           What the app must do so both sides agree (hashing, encryption)
 pyproject.toml, uv.lock  Dependencies (ranges) and the exact pinned versions
 ```

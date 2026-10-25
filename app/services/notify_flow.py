@@ -13,6 +13,7 @@ from fastapi import HTTPException
 import asyncpg
 
 from app.config import settings
+from app.services import stats
 from app.services.devices import verify_device
 from app.services.push import PUSH_DEAD_TOKEN, PUSH_OK, send_push
 from app.services.rate_limit import claim_campaign, release_campaign
@@ -91,6 +92,8 @@ async def run_deliveries(
                     item.encrypted_payload,
                 )
 
+    await stats.bump(conn, stats.MESSAGES_SENT, sum(len(r) for r in recipients_of))
+
     # Step 4: wake each device once. One broken contact must not stop the
     # others. A wake-up that fails stays marked `wake_pending` and the
     # 15-minute dispatcher retries it. The app never has to retry.
@@ -100,6 +103,12 @@ async def run_deliveries(
             woken[device] = False  # the provider already refused this token
             continue
         result = await send_push(recipient["push_token"], recipient["platform"], lang=recipient["lang"])
+        await stats.bump(
+            conn,
+            stats.PUSHES_OK if result == PUSH_OK
+            else stats.PUSHES_DEAD if result == PUSH_DEAD_TOKEN
+            else stats.PUSHES_FAILED,
+        )
         if result == PUSH_DEAD_TOKEN:
             await mark_dead(conn, device, recipient["push_token"])
         if result == PUSH_OK:
@@ -120,6 +129,8 @@ async def run_deliveries(
         # Nobody on the codes yet: do not use up a slot,
         # and let the app retry with the same id.
         await release_campaign(conn, campaign_id)
+    else:
+        await stats.bump(conn, stats.NOTIFY_TAPS)
 
     return {
         "status": "ok",
