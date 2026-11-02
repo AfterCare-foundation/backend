@@ -1,42 +1,113 @@
-# Shared fixtures for HTTP tests against the local aftercare_dev database.
+# Shared fixtures for HTTP tests.
+#
+# Tests run against their own database (TEST_DATABASE_URL, default
+# aftercare_test on localhost), never the one in .env or DATABASE_URL, because
+# every test wipes all tables. check_test_database_url() refuses anything that
+# is not a local database named *_test, and the whole run stops before any
+# connection if it fails.
 
+import asyncio
 import hashlib
 import os
-import subprocess
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
+import asyncpg
 import pytest
-from fastapi.testclient import TestClient
 
-from app.main import app
+DEFAULT_TEST_DATABASE_URL = "postgresql://aftercare_dev:aftercare_dev_password@localhost:5432/aftercare_test"
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
-PGPASSWORD = "aftercare_dev_password"
+
+def check_test_database_url(url: str) -> None:
+    """Raise ValueError unless url is a plain local PostgreSQL URL for a *_test database."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        parts.port  # raises ValueError if malformed
+    except ValueError as exc:
+        raise ValueError("cannot parse the URL") from exc
+    if parts.scheme not in ("postgresql", "postgres"):
+        raise ValueError("scheme must be postgresql:// or postgres://")
+    # A comma means several hosts; libpq would try them in turn. A second "@"
+    # makes urlsplit (host after the last "@") and asyncpg (after the first)
+    # disagree about which host this is.
+    if "," in parts.netloc or parts.netloc.count("@") > 1 or host not in LOCAL_HOSTS:
+        raise ValueError("host must be exactly one of localhost, 127.0.0.1 or ::1")
+    # ?host=... or ?dbname=... would override the parts checked here.
+    if "?" in url or "#" in url or parts.query or parts.fragment:
+        raise ValueError("no query string or fragment allowed")
+    name = unquote(parts.path.removeprefix("/"))
+    if "/" in name or not name.endswith("_test"):
+        raise ValueError("database name must end in _test")
+
+
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
+try:
+    check_test_database_url(TEST_DATABASE_URL)
+except ValueError as exc:
+    pytest.exit(
+        f"Refusing to run: TEST_DATABASE_URL is not a safe test database ({exc}). "
+        "Tests wipe every table, so it must be local and named *_test.",
+        returncode=2,
+    )
+
+# Order matters: app.config reads DATABASE_URL when app.main is imported, and
+# environment variables beat .env. Set it first, import the app second.
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.main import app  # noqa: E402
 
 
 def sha256_hex(label: str) -> str:
     return hashlib.sha256(label.encode()).hexdigest()
 
 
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+async def _wipe() -> None:
+    conn = await asyncpg.connect(TEST_DATABASE_URL)
+    try:
+        names = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+        if names:
+            tables = ", ".join(_quote_ident(r["tablename"]) for r in names)
+            await conn.execute(f"TRUNCATE {tables} CASCADE")
+    finally:
+        await conn.close()
+
+
 def wipe_db():
-    env = os.environ.copy()
-    env["PGPASSWORD"] = PGPASSWORD
-    subprocess.check_call(
-        [
-            "psql",
-            "-h", "localhost",
-            "-U", "aftercare_dev",
-            "-d", "aftercare_dev",
-            "-v", "ON_ERROR_STOP=1",
-            "-c",
-            """
-            TRUNCATE mailbox, burned_codes, daily_stats,
-                     notification_campaigns, token_subscriptions, devices
-            CASCADE;
-            """,
-        ],
-        env=env,
-        stdout=subprocess.DEVNULL,
-    )
+    asyncio.run(_wipe())
+
+
+def _psql_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "t" if value else "f"
+    return str(value)
+
+
+async def _sql(statement: str) -> str:
+    conn = await asyncpg.connect(TEST_DATABASE_URL)
+    try:
+        prepared = await conn.prepare(statement)
+        if not prepared.get_attributes():
+            await conn.execute(statement)
+            return ""
+        rows = await prepared.fetch()
+        return "\n".join("|".join(_psql_text(v) for v in row.values()) for row in rows)
+    finally:
+        await conn.close()
+
+
+def sql(statement: str) -> str:
+    """Run one statement on the test database; rows come back like `psql -t -A`."""
+    return asyncio.run(_sql(statement)).strip()
 
 
 @pytest.fixture

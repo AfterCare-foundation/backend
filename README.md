@@ -72,6 +72,10 @@ createuser aftercare_dev --pwprompt   # or use the role already created
 createdb aftercare_dev --owner=aftercare_dev
 for f in migrations/*.sql; do psql -h localhost -U aftercare_dev -d aftercare_dev -f "$f"; done
 
+# Separate database for the tests (once; they wipe it on every run)
+createdb aftercare_test --owner=aftercare_dev
+for f in migrations/*.sql; do psql -h localhost -U aftercare_dev -d aftercare_test -f "$f"; done
+
 # App
 uv sync            # creates .venv with the exact versions in uv.lock
 cp .env.example .env
@@ -85,9 +89,17 @@ uv run uvicorn app.main:app --reload --no-access-log
 
 Never commit `.env`, `.venv/`, or `secrets/`.
 
+PowerShell equivalent of the migrations loop (use `-d aftercare_test` for the test database):
+
+```powershell
+Get-ChildItem migrations\*.sql | Sort-Object Name | ForEach-Object { psql -h localhost -U aftercare_dev -d aftercare_dev -f $_.FullName }
+```
+
 ```bash
 uv run pytest
 ```
+
+The tests use **`aftercare_test`**, never the database in `.env` or `DATABASE_URL`, because every test empties all tables. Set `TEST_DATABASE_URL` to use another one (default `postgresql://aftercare_dev:aftercare_dev_password@localhost:5432/aftercare_test`). The run refuses to start unless the URL points at `localhost`, `127.0.0.1` or `::1`, the database name ends in `_test`, and the URL has no `?query` part. Run new migrations on `aftercare_test` too.
 
 Dependencies are listed in `pyproject.toml` and pinned, including indirect ones, in `uv.lock`. Change a dependency with `uv add <package>` or `uv lock --upgrade-package <package>`, then commit both files.
 

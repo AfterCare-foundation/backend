@@ -4,17 +4,7 @@
 from uuid import uuid4
 
 from app.services.push import PUSH_DEAD_TOKEN, PUSH_FAILED, PUSH_OK
-from tests.conftest import notify, sha256_hex, subscribe, waiting
-
-
-def _sql(statement: str) -> str:
-    import os, subprocess
-    from tests.conftest import PGPASSWORD
-
-    return subprocess.check_output(
-        ["psql", "-h", "localhost", "-U", "aftercare_dev", "-d", "aftercare_dev", "-t", "-A", "-c", statement],
-        env={**os.environ, "PGPASSWORD": PGPASSWORD}, text=True,
-    ).strip()
+from tests.conftest import notify, sha256_hex, sql as _sql, subscribe, waiting
 
 
 def _multi_notify(client, *, device, cards, campaign_id):
