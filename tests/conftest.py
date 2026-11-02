@@ -55,6 +55,10 @@ except ValueError as exc:
 # Order matters: app.config reads DATABASE_URL when app.main is imported, and
 # environment variables beat .env. Set it first, import the app second.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+# ENVIRONMENT has no default. Tests must not run as production: it would demand
+# real APNs settings and switch /docs off. Forced, not setdefault, so a stray
+# ENVIRONMENT=production in the shell or .env can't change what the tests cover.
+os.environ["ENVIRONMENT"] = "development"
 
 from fastapi.testclient import TestClient  # noqa: E402
 

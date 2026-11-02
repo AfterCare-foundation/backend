@@ -1,15 +1,26 @@
 # app/config.py
 
+import os
+from typing import Literal
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # hide_input_in_errors: a startup error must never echo setting values
+    # (database password, APNs private key). Errors name settings only.
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", hide_input_in_errors=True
+    )
 
     database_url: str
 
-    # development → /docs enabled. production → /docs off.
-    environment: str = "development"
+    # No default on purpose: a forgotten or misspelled ENVIRONMENT stops startup
+    # instead of silently running as development.
+    # development → /docs and /openapi.json enabled. production → off, and the
+    # push settings below are enforced at startup.
+    environment: Literal["development", "production"]
 
     # When several app processes share one database, advisory locks still
     # prevent double-send. Set false on extra web workers if you add a
@@ -50,6 +61,25 @@ class Settings(BaseSettings):
     notify_max_campaigns: int = 6
     notify_max_campaigns_per_day: int = 3  # rolling 24 hours
     notify_max_contacts_per_campaign: int = 100
+
+    @model_validator(mode="after")
+    def _production_must_be_safe(self):
+        if self.environment != "production":
+            return self
+        problems = []
+        if self.push_stub_mode:
+            problems.append("PUSH_STUB_MODE must be false")
+        if not self.apns_production:
+            problems.append("APNS_PRODUCTION must be true")
+        if not self.apns_key_id.strip():
+            problems.append("APNS_KEY_ID must be set")
+        if not self.apns_team_id.strip():
+            problems.append("APNS_TEAM_ID must be set")
+        if not self.apns_key.strip() and not os.path.isfile(self.apns_key_file):
+            problems.append("APNS_KEY must be set (or APNS_KEY_FILE must exist)")
+        if problems:
+            raise ValueError("Unsafe production configuration: " + "; ".join(problems))
+        return self
 
 
 settings = Settings()

@@ -51,16 +51,21 @@ async def lifespan(app: FastAPI):
     logger.info("AfterCare backend stopped")
 
 
-docs_url = "/docs" if settings.environment == "development" else None
+def app_kwargs(environment: str) -> dict:
+    # In production the API schema is not public either, not just /docs.
+    dev = environment == "development"
+    return dict(
+        title="AfterCare API",
+        description="Anonymous STI exposure notification backend",
+        version="1.0.0",
+        docs_url="/docs" if dev else None,
+        redoc_url=None,
+        openapi_url="/openapi.json" if dev else None,
+        lifespan=lifespan,
+    )
 
-app = FastAPI(
-    title="AfterCare API",
-    description="Anonymous STI exposure notification backend",
-    version="1.0.0",
-    docs_url=docs_url,
-    redoc_url=None,
-    lifespan=lifespan,
-)
+
+app = FastAPI(**app_kwargs(settings.environment))
 
 app.include_router(subscribe.router)
 app.include_router(notify.router)
