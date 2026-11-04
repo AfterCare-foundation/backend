@@ -113,9 +113,9 @@ See `.env.example`. Important flags:
 
 | Variable                                                           | Meaning                                                                                                                                                                                                                              |
 | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ENVIRONMENT`                                                      | `development` enables `/docs`. Use `production` on the host.                                                                                                                                                                         |
-| `PUSH_STUB_MODE`                                                   | `true` logs pushes instead of calling Apple/Google. Messages still go to the mailbox.                                                                                                                                                |
-| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_PRODUCTION` | Apple push settings. `APNS_PRODUCTION=true` for TestFlight and App Store builds.                                                                                                                                                     |
+| `ENVIRONMENT`                                                      | Required, no default: `development` or `production`; anything else stops startup. `development` serves `/docs` and `/openapi.json`. `production` serves neither and refuses to start without real push settings (below).             |
+| `PUSH_STUB_MODE`                                                   | `true` logs pushes instead of calling Apple/Google. Messages still go to the mailbox. Must be `false` when `ENVIRONMENT=production`.                                                                                                 |
+| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_PRODUCTION` | Apple push settings. `APNS_PRODUCTION=true` for TestFlight and App Store builds; required, with the key ID and team ID, when `ENVIRONMENT=production`.                                                                               |
 | `APNS_KEY` / `APNS_KEY_FILE`                                       | The `.p8` key: its text in `APNS_KEY` (for hosts without secret files), or a file path. Never commit it.                                                                                                                             |
 | `MAILBOX_TTL_DAYS`                                                 | Days a notification waits for the app to fetch it (default 30).                                                                                                                                                                      |
 | `RUN_BACKGROUND_JOBS`                                              | Wake-up retries (every 15 minutes) and the daily cleanup in this process. Cleanup deletes expired subscriptions (`SUBSCRIPTION_TTL_DAYS`), erases long-dead push tokens and deletes unfetched mailbox messages (`MAILBOX_TTL_DAYS`). |
@@ -125,6 +125,8 @@ See `.env.example`. Important flags:
 | `NOTIFY_MAX_CAMPAIGNS_PER_DAY`                                     | Campaigns per rolling 24 hours (default 3).                                                                                                                                                                                          |
 | `NOTIFY_MAX_CAMPAIGNS`, `NOTIFY_RATE_LIMIT_DAYS`                   | Campaigns per rolling window (default 6 per 30 days).                                                                                                                                                                                |
 | `NOTIFY_MAX_CONTACTS_PER_CAMPAIGN`                                 | Contacts per Notify tap (default 100).                                                                                                                                                                                               |
+
+With `ENVIRONMENT=production` the server refuses to start unless `PUSH_STUB_MODE=false`, `APNS_PRODUCTION=true`, `APNS_KEY_ID` and `APNS_TEAM_ID` are set, and an APNs key is given (`APNS_KEY`, or a file at `APNS_KEY_FILE`). The error names the settings, never their values.
 
 ### Test instance on Scalingo
 
@@ -174,6 +176,8 @@ All hashes are **64 lowercase hex characters** (SHA-256).
   ]
 }
 ```
+
+Errors: a request that fails validation gets `422` with `{"detail": [{"loc": [...], "type": "...", "msg": "..."}]}`. The submitted values are never echoed back, and a message pydantic would build from the input reads `Invalid value`. An unexpected server error gets `500` with `{"detail": "internal_error"}`.
 
 `platform` on subscribe is `ios` or `android`. Optional `lang` (`en` default, or `de`) on `/subscribe` and `/update-push-id` sets the language of the wake-up push text (title "AfterCare"); any other value means English. Omitting it keeps the stored language.
 
