@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
+from app.body_limit import LimitRequestBody
 from app.config import settings
 from app.database import init_db, close_db
 from app.routes import subscribe, notify, push_id, inbox
@@ -140,6 +141,9 @@ class CatchUnexpectedErrors:
                 await response(scope, receive, send)
 
 
+# The last one added is outermost: the cap is added first so it sits inside
+# CatchUnexpectedErrors and a bug in it is caught without a traceback.
+app.add_middleware(LimitRequestBody)
 app.add_middleware(CatchUnexpectedErrors)
 
 
