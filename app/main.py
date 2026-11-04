@@ -62,6 +62,15 @@ def app_kwargs(environment: str) -> dict:
         redoc_url=None,
         openapi_url="/openapi.json" if dev else None,
         lifespan=lifespan,
+        # FastAPI's built-in OpenTelemetry records request bodies and exceptions.
+        # All of it off, in every environment: no telemetry (CLAUDE.md), invariant 3.
+        telemetry={
+            "auto_configure": False,
+            "tracing": False,
+            "metrics": False,
+            "logs": False,
+            "operation_spans": False,
+        },
     )
 
 

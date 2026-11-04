@@ -1,5 +1,7 @@
 # Startup configuration checks. No database needed.
 
+import logging
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -124,3 +126,39 @@ def test_development_app_serves_docs_and_schema():
     client = _client_for("development")
     assert client.get("/docs").status_code == 200
     assert client.get("/openapi.json").status_code == 200
+
+
+TELEMETRY_SWITCHES = ("tracing", "metrics", "logs", "operation_spans", "auto_configure")
+
+
+@pytest.mark.parametrize("environment", ["development", "production"])
+def test_fastapi_telemetry_is_fully_off(environment):
+    kwargs = app_kwargs(environment)
+    kwargs.pop("lifespan")
+    app = FastAPI(**kwargs)
+    assert {k: app._telemetry[k] for k in TELEMETRY_SWITCHES} == dict.fromkeys(TELEMETRY_SWITCHES, False)
+
+
+def test_no_opentelemetry_sdk_is_installed():
+    # opentelemetry-api comes with fastapi and is inert alone. The SDK is what
+    # exports; it would arrive with fastapi[standard] or fastapi[opentelemetry].
+    import importlib.util
+
+    assert importlib.util.find_spec("opentelemetry.sdk") is None
+
+
+@pytest.mark.parametrize("environment", ["development", "production"])
+def test_otel_environment_variables_wire_up_no_exporter(environment, monkeypatch, caplog):
+    from opentelemetry import trace
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:9/")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://127.0.0.1:9/v1/traces")
+    kwargs = app_kwargs(environment)
+    kwargs.pop("lifespan")
+    with TestClient(FastAPI(**kwargs)) as client:  # runs startup, where FastAPI auto-configures
+        client.get("/nothing-here")
+    # FastAPI swallows a failed auto-configure (here: no SDK installed) and only
+    # logs a warning, so the warning is the sign that it tried at all.
+    assert not [r for r in caplog.records if "telemetry" in r.getMessage().lower()]
+    assert isinstance(trace.get_tracer_provider(), trace.ProxyTracerProvider)

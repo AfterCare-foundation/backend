@@ -128,6 +128,8 @@ See `.env.example`. Important flags:
 
 With `ENVIRONMENT=production` the server refuses to start unless `PUSH_STUB_MODE=false`, `APNS_PRODUCTION=true`, `APNS_KEY_ID` and `APNS_TEAM_ID` are set, and an APNs key is given (`APNS_KEY`, or a file at `APNS_KEY_FILE`). The error names the settings, never their values.
 
+FastAPI's built-in OpenTelemetry is switched off in code, in every environment, so no `OTEL_*` variable can turn on tracing or export.
+
 ### Test instance on Scalingo
 
 Procfile and `.python-version` are all it needs. Set `ENVIRONMENT=development`, `RUN_BACKGROUND_JOBS=true` and `WEB_CONCURRENCY=1` (one process is enough for a test instance), add the PostgreSQL add-on, and apply every file in `migrations/` in order. `/docs` is open in this mode, so use it for test data only.
