@@ -136,7 +136,8 @@ app.add_middleware(CatchUnexpectedErrors)
 
 # ctx keys that come from the schema or are counts, never from the input.
 _SAFE_CTX_KEYS = {
-    "min_length", "max_length", "expected_length", "gt", "ge", "lt", "le",
+    "min_length", "max_length", "expected_length", "actual_length", "field_type",
+    "gt", "ge", "lt", "le",
     "multiple_of", "pattern", "expected", "allowed_lengths", "ordered",
 }
 # Types whose msg is fixed text of ours or of FastAPI.

@@ -4,6 +4,7 @@
 import asyncio
 import logging
 import traceback
+import types
 from uuid import uuid4
 
 import pytest
@@ -112,13 +113,15 @@ def test_unmatched_route_still_404s(plain_client, caplog):
 
 def test_http_exceptions_are_unchanged(client, caplog):
     caplog.set_level(logging.DEBUG)
+    # A card holds two devices, so the third one is refused.
     subscribe(client, device="a", card="shared")
+    subscribe(client, device="b", card="shared")
     body = {
         "et_hash": sha256_hex("card:shared"),
-        "push_id_hash": sha256_hex("push:b"),
-        "push_token": "push-token-b",
+        "push_id_hash": sha256_hex("push:c"),
+        "push_token": "push-token-c",
         "platform": "ios",
-        "device_credential": sha256_hex("secret:b"),
+        "device_credential": sha256_hex("secret:c"),
     }
     taken = client.post("/subscribe", json=body)
     assert taken.status_code == 409
@@ -129,7 +132,7 @@ def test_http_exceptions_are_unchanged(client, caplog):
         json={"push_id_hash": sha256_hex("push:a"), "device_credential": sha256_hex("secret:wrong")},
     )
     assert wrong.status_code == 403
-    assert set(wrong.json()) == {"detail"} and isinstance(wrong.json()["detail"], str)
+    assert wrong.json() == {"detail": "Device credential does not match"}
     assert not [r for r in caplog.records if "Unhandled" in r.getMessage()]
 
 
@@ -224,6 +227,21 @@ def test_uuid_errors_do_not_quote_the_input(plain_client):
     assert all("found `" not in e["msg"] for e in r.json()["detail"])
 
 
+def test_list_length_messages_are_kept(plain_client):
+    # A count and a schema type are not input, so pydantic's message stays.
+    delivery = {"et_hash": sha256_hex("card:x"), "encrypted_payload": "x"}
+    notify_body = {
+        "sender_push_id_hash": sha256_hex("push:x"),
+        "device_credential": sha256_hex("secret:x"),
+        "campaign_id": str(uuid4()),
+        "deliveries": [delivery] * 101,
+    }
+    r = plain_client.post("/notify", json=notify_body)
+    _assert_clean_422(r, [])
+    too_long = [e for e in r.json()["detail"] if e["type"] == "too_long"]
+    assert too_long and "100" in too_long[0]["msg"]
+
+
 def test_validation_errors_are_not_logged_with_the_body(plain_client, caplog):
     caplog.set_level(logging.DEBUG)
     plain_client.post("/subscribe", json=_subscribe_body(device_credential=ALMOST_CREDENTIAL))
@@ -257,7 +275,8 @@ def test_cron_failures_log_job_and_type_only(runner, job, monkeypatch, caplog):
         raise StopLoop
 
     monkeypatch.setattr(cron, job, failing)
-    monkeypatch.setattr(cron.asyncio, "sleep", stop_after_one_iteration)
+    # Swap only cron's own reference; patching asyncio.sleep would hit every caller.
+    monkeypatch.setattr(cron, "asyncio", types.SimpleNamespace(sleep=stop_after_one_iteration))
 
     with pytest.raises(StopLoop):
         asyncio.run(runner())
