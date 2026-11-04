@@ -14,15 +14,15 @@ Sauna wristband pairing, CAPTCHA, and anomaly detection are not in this codebase
 
 ## What the server stores
 
-| Stored | Not stored |
-|---|---|
-| `SHA-256` of the card token | Raw QR token |
-| `SHA-256` of the device credential | Names, email, phone, location |
-| Hashed push ID + the real push token (Apple/Google need it to deliver) | IP addresses |
-| UTC **date** a card was scanned (`created_date`) | Encounter time |
-| Per Notify tap: `campaign_id`, sender device hash and the exact time, for rate limits (30 days) | Which contacts a campaign reached |
-| Each notification's encrypted bytes, filed under the **recipient device** with a date only, until the app collects it or `MAILBOX_TTL_DAYS` (30) pass | Plaintext STI type, the card hash or the sender of a waiting message |
-| Anonymous **daily counts** for reporting (`daily_stats`: a date, a metric name and a number, e.g. `pairings_completed`), kept after the 180-day cleanup | Anything that identifies a device, card, person, STI type or place |
+| Stored                                                                                                                                                  | Not stored                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `SHA-256` of the card token                                                                                                                             | Raw QR token                                                         |
+| `SHA-256` of the device credential                                                                                                                      | Names, email, phone, location                                        |
+| Hashed push ID + the real push token (Apple/Google need it to deliver)                                                                                  | IP addresses                                                         |
+| UTC **date** a card was scanned (`created_date`)                                                                                                        | Encounter time                                                       |
+| Per Notify tap: `campaign_id`, sender device hash and the exact time, for rate limits (30 days)                                                         | Which contacts a campaign reached                                    |
+| Each notification's encrypted bytes, filed under the **recipient device** with a date only, until the app collects it or `MAILBOX_TTL_DAYS` (30) pass   | Plaintext STI type, the card hash or the sender of a waiting message |
+| Anonymous **daily counts** for reporting (`daily_stats`: a date, a metric name and a number, e.g. `pairings_completed`), kept after the 180-day cleanup | Anything that identifies a device, card, person, STI type or place   |
 
 A subscription whose push token Apple or Google report as dead (app uninstalled, token replaced) is marked, and the **token is erased after 30 days** (`DEAD_TOKEN_GRACE_DAYS`) unless the app sends a fresh one first (`/update-push-id` or a re-scan). The subscription itself stays until its normal 180-day end, so a returning device moves back with `/update-push-id`, keeps its original date, and needs no re-join. The code stays occupied meanwhile, so nobody else can take the slot. Waiting messages do not depend on the token: they stay in the mailbox either way.
 
@@ -30,7 +30,7 @@ Subscriptions expire after **180 days** (`SUBSCRIPTION_TTL_DAYS`) and are delete
 
 **Usage statistics.** Counters are bumped as things happen (new devices, codes joined, pairings completed, Notify taps, messages sent and collected, pushes ok/failed/dead, delete requests, expiries) and the daily cleanup job also records snapshots (active codes, active devices, waiting messages). Read them with SQL, for example monthly totals: `SELECT date_trunc('month', day) AS month, metric, SUM(value) FROM daily_stats GROUP BY 1, 2 ORDER BY 1, 2;` (use `MAX(value)` for the three snapshot metrics instead of `SUM`). A failure in counting is logged and never affects a request.
 
-The infection name (gonorrhoea, syphilis, HIV, Mpox, HPV, …) is chosen in the **app** at notify time. The card is not tied to an STI. The phone should encrypt that choice; the lock-screen text is always generic and the push carries **no ciphertext** (the app fetches its messages itself): *You have a new message. Open the app to read it.*
+The infection name (gonorrhoea, syphilis, HIV, Mpox, HPV, …) is chosen in the **app** at notify time. The card is not tied to an STI. The phone should encrypt that choice; the lock-screen text is always generic and the push carries **no ciphertext** (the app fetches its messages itself): _You have a new message. Open the app to read it._
 
 Each card has its own token, so the app encrypts the STI type **once per contact**. Hashing and AES-GCM details: [docs/CRYPTO.md](docs/CRYPTO.md).
 
@@ -58,7 +58,7 @@ Each card has its own token, so the app encrypts the STI type **once per contact
 - At most **6 campaigns** in a rolling **30 days**.
 - At most **100 unique card tokens** per campaign.
 
-A *campaign* is one tap of Notify in the app (`campaign_id`), sent in **one** request. A `campaign_id` can be used once: a second request with the same id gets `409 campaign_already_used`. If the wake-up push fails, the message is already in the mailbox and the server retries the push itself (every 15 minutes, for about a day); the response says how many contacts are `retrying`, and the app never retries. If nobody could be reached at all (no one else on the codes yet), the id and the slot are given back. The server keeps only the campaign id, the sender device and the time, never which contacts were reached.
+A _campaign_ is one tap of Notify in the app (`campaign_id`), sent in **one** request. A `campaign_id` can be used once: a second request with the same id gets `409 campaign_already_used`. If the wake-up push fails, the message is already in the mailbox and the server retries the push itself (every 15 minutes, for about a day); the response says how many contacts are `retrying`, and the app never retries. If nobody could be reached at all (no one else on the codes yet), the id and the slot are given back. The server keeps only the campaign id, the sender device and the time, never which contacts were reached.
 
 ---
 
@@ -111,20 +111,20 @@ The connection pool sets PostgreSQL `TimeZone` to **UTC** for this app only.
 
 See `.env.example`. Important flags:
 
-| Variable | Meaning |
-|---|---|
-| `ENVIRONMENT` | `development` enables `/docs`. Use `production` on the host. |
-| `PUSH_STUB_MODE` | `true` logs pushes instead of calling Apple/Google. Messages still go to the mailbox. |
-| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_PRODUCTION` | Apple push settings. `APNS_PRODUCTION=true` for TestFlight and App Store builds. |
-| `APNS_KEY` / `APNS_KEY_FILE` | The `.p8` key: its text in `APNS_KEY` (for hosts without secret files), or a file path. Never commit it. |
-| `MAILBOX_TTL_DAYS` | Days a notification waits for the app to fetch it (default 30). |
-| `RUN_BACKGROUND_JOBS` | Wake-up retries (every 15 minutes) and the daily cleanup in this process. Cleanup deletes expired subscriptions (`SUBSCRIPTION_TTL_DAYS`), erases long-dead push tokens and deletes unfetched mailbox messages (`MAILBOX_TTL_DAYS`). |
-| `SUBSCRIPTION_TTL_DAYS` | Days a card scan is kept (default 180). |
-| `MAX_SUBSCRIPTIONS_PER_DAY` | New connections one device may add per UTC day (default 30). |
-| `DEAD_TOKEN_GRACE_DAYS` | Days a dead push token is kept before it is erased (default 30). The subscription stays until `SUBSCRIPTION_TTL_DAYS`. |
-| `NOTIFY_MAX_CAMPAIGNS_PER_DAY` | Campaigns per rolling 24 hours (default 3). |
-| `NOTIFY_MAX_CAMPAIGNS`, `NOTIFY_RATE_LIMIT_DAYS` | Campaigns per rolling window (default 6 per 30 days). |
-| `NOTIFY_MAX_CONTACTS_PER_CAMPAIGN` | Contacts per Notify tap (default 100). |
+| Variable                                                           | Meaning                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ENVIRONMENT`                                                      | `development` enables `/docs`. Use `production` on the host.                                                                                                                                                                         |
+| `PUSH_STUB_MODE`                                                   | `true` logs pushes instead of calling Apple/Google. Messages still go to the mailbox.                                                                                                                                                |
+| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_PRODUCTION` | Apple push settings. `APNS_PRODUCTION=true` for TestFlight and App Store builds.                                                                                                                                                     |
+| `APNS_KEY` / `APNS_KEY_FILE`                                       | The `.p8` key: its text in `APNS_KEY` (for hosts without secret files), or a file path. Never commit it.                                                                                                                             |
+| `MAILBOX_TTL_DAYS`                                                 | Days a notification waits for the app to fetch it (default 30).                                                                                                                                                                      |
+| `RUN_BACKGROUND_JOBS`                                              | Wake-up retries (every 15 minutes) and the daily cleanup in this process. Cleanup deletes expired subscriptions (`SUBSCRIPTION_TTL_DAYS`), erases long-dead push tokens and deletes unfetched mailbox messages (`MAILBOX_TTL_DAYS`). |
+| `SUBSCRIPTION_TTL_DAYS`                                            | Days a card scan is kept (default 180).                                                                                                                                                                                              |
+| `MAX_SUBSCRIPTIONS_PER_DAY`                                        | New connections one device may add per UTC day (default 30).                                                                                                                                                                         |
+| `DEAD_TOKEN_GRACE_DAYS`                                            | Days a dead push token is kept before it is erased (default 30). The subscription stays until `SUBSCRIPTION_TTL_DAYS`.                                                                                                               |
+| `NOTIFY_MAX_CAMPAIGNS_PER_DAY`                                     | Campaigns per rolling 24 hours (default 3).                                                                                                                                                                                          |
+| `NOTIFY_MAX_CAMPAIGNS`, `NOTIFY_RATE_LIMIT_DAYS`                   | Campaigns per rolling window (default 6 per 30 days).                                                                                                                                                                                |
+| `NOTIFY_MAX_CONTACTS_PER_CAMPAIGN`                                 | Contacts per Notify tap (default 100).                                                                                                                                                                                               |
 
 ### Test instance on Scalingo
 
@@ -145,15 +145,15 @@ On the load balancer, disable access logs and strip client IPs (see comments in 
 All hashes are **64 lowercase hex characters** (SHA-256).  
 `device_credential` is **32 random bytes** as 64 lowercase hex; stored as `SHA-256` of those bytes. Keep it in the OS keystore on the phone.
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/health` | Liveness |
-| `POST` | `/subscribe` | Register this device on a scanned card. A code holds at most 2 devices; a third gets `409 code_in_use`. A device can add at most 30 new codes per UTC day, then `429` |
-| `DELETE` | `/subscribe` | Erase this device (GDPR). Its codes are also closed for good (`burned_codes`, card hash only), so nobody new can take the freed slot; the other phone can still re-scan. Closed codes are forgotten after `SUBSCRIPTION_TTL_DAYS` |
-| `POST` | `/notify` | Store notifications in the contacts' mailboxes and wake their phones, immediately |
-| `POST` | `/inbox` | Messages waiting for this device: `{"notifications": [{"id", "enc"}]}`, oldest first, at most 200. Deletes nothing |
-| `POST` | `/inbox/confirm` | `{push_id_hash, device_credential, ids: [...]}`: delete the messages the app has safely stored |
-| `POST` | `/update-push-id` | Push token changed (reinstall / permissions): moves the device's subscriptions to the new ID, keeping their expiry. Call it before `/subscribe` after a reinstall |
+| Method   | Path              | Purpose                                                                                                                                                                                                                           |
+| -------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/health`         | Liveness                                                                                                                                                                                                                          |
+| `POST`   | `/subscribe`      | Register this device on a scanned card. A code holds at most 2 devices; a third gets `409 code_in_use`. A device can add at most 30 new codes per UTC day, then `429`                                                             |
+| `DELETE` | `/subscribe`      | Erase this device (GDPR). Its codes are also closed for good (`burned_codes`, card hash only), so nobody new can take the freed slot; the other phone can still re-scan. Closed codes are forgotten after `SUBSCRIPTION_TTL_DAYS` |
+| `POST`   | `/notify`         | Store notifications in the contacts' mailboxes and wake their phones, immediately                                                                                                                                                 |
+| `POST`   | `/inbox`          | Messages waiting for this device: `{"notifications": [{"id", "enc"}]}`, oldest first, at most 200. Deletes nothing                                                                                                                |
+| `POST`   | `/inbox/confirm`  | `{push_id_hash, device_credential, ids: [...]}`: delete the messages the app has safely stored                                                                                                                                    |
+| `POST`   | `/update-push-id` | Push token changed (reinstall / permissions): moves the device's subscriptions to the new ID, keeping their expiry. Call it before `/subscribe` after a reinstall                                                                 |
 
 `POST /notify` body (shape):
 
@@ -163,8 +163,14 @@ All hashes are **64 lowercase hex characters** (SHA-256).
   "device_credential": "<64 hex>",
   "campaign_id": "<uuid>",
   "deliveries": [
-    { "et_hash": "<sha256 hex>", "encrypted_payload": "<ciphertext for this card>" },
-    { "et_hash": "<sha256 hex>", "encrypted_payload": "<ciphertext for this card>" }
+    {
+      "et_hash": "<sha256 hex>",
+      "encrypted_payload": "<ciphertext for this card>"
+    },
+    {
+      "et_hash": "<sha256 hex>",
+      "encrypted_payload": "<ciphertext for this card>"
+    }
   ]
 }
 ```
