@@ -1,6 +1,6 @@
 # AfterCare backend
 
-Anonymous STI exposure notification for [AfterCare](https://after-care.eu/). People connect with a tearable paper card; later, if someone tests positive, they can warn those connections without names, numbers, or an account.
+Anonymous STI exposure notification for [AfterCare](https://after-care.eu/). People connect with a tearable paper card or via a generated QR code; later, if someone tests positive, they can warn those connections without names, numbers, or an account.
 
 This repo is the **notification server** (Python / FastAPI / PostgreSQL). It is open source under [AGPL-3.0](LICENSE).
 
