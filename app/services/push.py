@@ -17,6 +17,7 @@ import time
 import httpx
 
 from app.config import settings
+from app.push_tokens import is_valid_push_token
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +148,13 @@ async def send_push(push_token: str, platform: str, lang: str = "en") -> str:
     Send ONE wake-up push. Returns PUSH_OK, PUSH_FAILED or PUSH_DEAD_TOKEN.
     Never raises: one broken recipient must not stop the others.
     Logs the error type only, never the token or the language.
+    A stored token in the wrong format (e.g. from before it was checked on
+    subscribe) is refused as dead before any network call, in stub mode too.
     """
+    if not is_valid_push_token(platform, push_token):
+        logger.warning("Push refused: stored token has an invalid format")
+        return PUSH_DEAD_TOKEN
+
     if settings.push_stub_mode:
         logger.info("[PUSH STUB] would send to %s device", platform)
         return PUSH_OK

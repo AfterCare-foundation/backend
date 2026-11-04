@@ -5,9 +5,10 @@
 
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.hashes import is_sha256_hex
+from app.push_tokens import is_valid_push_token
 
 CREDENTIAL_HEX = 64  # 256-bit secret, lowercase hex
 MAX_ENCRYPTED_PAYLOAD = 4096
@@ -62,6 +63,14 @@ class SubscribeRequest(BaseModel):
         if v not in ("ios", "android"):
             raise ValueError("Must be 'ios' or 'android'")
         return v
+
+    # Runs only if every field passed, so a bad platform gives one error, not two.
+    # The message is fixed text: the token must never be echoed or logged.
+    @model_validator(mode="after")
+    def validate_push_token(self):
+        if not is_valid_push_token(self.platform, self.push_token):
+            raise ValueError("push_token does not match the platform's format")
+        return self
 
 
 class Delivery(BaseModel):
@@ -169,3 +178,9 @@ class UpdatePushIdRequest(BaseModel):
         if v not in ("ios", "android"):
             raise ValueError("Must be 'ios' or 'android'")
         return v
+
+    @model_validator(mode="after")
+    def validate_push_token(self):
+        if not is_valid_push_token(self.new_platform, self.new_push_token):
+            raise ValueError("new_push_token does not match the platform's format")
+        return self

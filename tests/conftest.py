@@ -69,6 +69,11 @@ def sha256_hex(label: str) -> str:
     return hashlib.sha256(label.encode()).hexdigest()
 
 
+def push_token_for(device: str) -> str:
+    """A push token that passes the format check for both platforms (64 lowercase hex)."""
+    return sha256_hex(f"push-token:{device}")
+
+
 def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
@@ -142,7 +147,7 @@ def subscribe(client, *, device: str, card: str, platform: str = "ios", **extra)
     body = {
         "et_hash": sha256_hex(f"card:{card}"),
         "push_id_hash": sha256_hex(f"push:{device}"),
-        "push_token": f"push-token-{device}",
+        "push_token": push_token_for(device),
         "platform": platform,
         "device_credential": sha256_hex(f"secret:{device}"),
         **extra,

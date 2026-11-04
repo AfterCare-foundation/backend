@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from app import cron
 from app.database import get_db
 from app.main import app
-from tests.conftest import sha256_hex, subscribe
+from tests.conftest import push_token_for, sha256_hex, subscribe
 
 SECRET = "SECRET-MARKER-aaa111"
 CAUSE_SECRET = "CAUSE-MARKER-bbb222"
@@ -119,7 +119,7 @@ def test_http_exceptions_are_unchanged(client, caplog):
     body = {
         "et_hash": sha256_hex("card:shared"),
         "push_id_hash": sha256_hex("push:c"),
-        "push_token": "push-token-c",
+        "push_token": push_token_for("c"),
         "platform": "ios",
         "device_credential": sha256_hex("secret:c"),
     }
@@ -149,7 +149,7 @@ def _subscribe_body(**override):
     body = {
         "et_hash": sha256_hex("card:x"),
         "push_id_hash": sha256_hex("push:x"),
-        "push_token": "tok",
+        "push_token": push_token_for("x"),
         "platform": "ios",
         "device_credential": sha256_hex("secret:x"),
     }

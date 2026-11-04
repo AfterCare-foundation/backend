@@ -4,7 +4,7 @@
 from uuid import uuid4
 
 from app.services.push import PUSH_DEAD_TOKEN, PUSH_FAILED, PUSH_OK
-from tests.conftest import notify, sha256_hex, sql as _sql, subscribe, waiting
+from tests.conftest import notify, push_token_for, sha256_hex, sql as _sql, subscribe, waiting
 
 
 def _multi_notify(client, *, device, cards, campaign_id):
@@ -67,7 +67,7 @@ def test_two_devices_notify_excludes_sender(client, sent):
     assert response.status_code == 200, response.text
     assert response.json()["pushed"] == 1
 
-    assert [call["push_token"] for call in sent] == ["push-token-bob"]
+    assert [call["push_token"] for call in sent] == [push_token_for("bob")]
     assert waiting(client, device="bob") == ["ciphertext-for-pink"]
     assert waiting(client, device="alice") == []  # the sender gets nothing
 
@@ -194,7 +194,7 @@ def test_third_device_cannot_join_a_code(client):
         json={
             "et_hash": sha256_hex("card:pink"),
             "push_id_hash": sha256_hex("push:cara"),
-            "push_token": "push-token-cara",
+            "push_token": push_token_for("cara"),
             "platform": "ios",
             "device_credential": sha256_hex("secret:cara"),
         },
@@ -219,7 +219,7 @@ def test_reinstalled_phone_keeps_its_slot_and_its_messages_via_update_push_id(cl
         json={
             "old_push_id_hash": sha256_hex("push:bob"),
             "new_push_id_hash": sha256_hex("push:bob2"),
-            "new_push_token": "push-token-bob2",
+            "new_push_token": push_token_for("bob2"),
             "new_platform": "ios",
             "device_credential": sha256_hex("secret:bob"),
         },
@@ -232,7 +232,7 @@ def test_reinstalled_phone_keeps_its_slot_and_its_messages_via_update_push_id(cl
         json={
             "et_hash": sha256_hex("card:pink"),
             "push_id_hash": sha256_hex("push:bob2"),
-            "push_token": "push-token-bob2",
+            "push_token": push_token_for("bob2"),
             "platform": "ios",
             "device_credential": sha256_hex("secret:bob"),
         },
@@ -258,7 +258,7 @@ def test_a_stale_code_is_skipped_and_the_others_are_delivered(client, sent):
     body = response.json()
     assert body["contacts"] == 2
     assert body["skipped"] == [{"et_hash": sha256_hex("card:stranger"), "reason": "not_subscribed"}]
-    assert sorted(c["push_token"] for c in sent) == ["push-token-bob", "push-token-dan"]
+    assert sorted(c["push_token"] for c in sent) == sorted([push_token_for("bob"), push_token_for("dan")])
     assert waiting(client, device="bob") == ["ciphertext-for-pink"]
     assert waiting(client, device="erin") == []  # the skipped code got nothing
 
@@ -286,7 +286,7 @@ def test_one_failed_push_does_not_stop_the_rest_and_the_server_retries_it(client
     broken = {"on": True}
     calls = _answering_push(
         monkeypatch,
-        lambda token: PUSH_FAILED if broken["on"] and token == "push-token-cara" else PUSH_OK,
+        lambda token: PUSH_FAILED if broken["on"] and token == push_token_for("cara") else PUSH_OK,
     )
 
     response = _multi_notify(client, device="alice", cards=["pink", "green", "blue"], campaign_id=str(uuid4()))
@@ -303,14 +303,14 @@ def test_one_failed_push_does_not_stop_the_rest_and_the_server_retries_it(client
     # Still broken: the dispatcher tries only the device that was not woken.
     calls.clear()
     _run_dispatcher(client)
-    assert calls == ["push-token-cara"]
+    assert calls == [push_token_for("cara")]
 
     # Provider recovers: woken once, then left alone.
     broken["on"] = False
     calls.clear()
     _run_dispatcher(client)
     _run_dispatcher(client)
-    assert calls == ["push-token-cara"]
+    assert calls == [push_token_for("cara")]
 
 
 def test_all_pushes_failing_still_uses_one_slot_and_is_retried(client, monkeypatch):
@@ -329,7 +329,7 @@ def test_all_pushes_failing_still_uses_one_slot_and_is_retried(client, monkeypat
     broken["on"] = False
     calls.clear()
     _run_dispatcher(client)
-    assert calls == ["push-token-bob"]
+    assert calls == [push_token_for("bob")]
     assert waiting(client, device="bob") == ["ciphertext-for-pink"]
 
 
@@ -446,13 +446,13 @@ def test_cleanup_wipes_long_dead_tokens_but_keeps_the_subscription_and_the_slot(
     client.portal.call(cleanup_expired_subscriptions)
 
     assert _sql(f"SELECT push_token FROM token_subscriptions WHERE push_id_hash = '{bob}'") == ""
-    assert _sql(f"SELECT push_token FROM token_subscriptions WHERE push_id_hash = '{cara}'") == "push-token-cara"
+    assert _sql(f"SELECT push_token FROM token_subscriptions WHERE push_id_hash = '{cara}'") == push_token_for("cara")
     assert _sql("SELECT COUNT(*) FROM token_subscriptions") == "3"  # nothing deleted
 
     # The slot stays taken: a stranger with the card cannot join.
     subscribe_response = client.post("/subscribe", json={
         "et_hash": sha256_hex("card:pink"), "push_id_hash": sha256_hex("push:dan"),
-        "push_token": "push-token-dan", "platform": "ios", "device_credential": sha256_hex("secret:dan"),
+        "push_token": push_token_for("dan"), "platform": "ios", "device_credential": sha256_hex("secret:dan"),
     })
     assert subscribe_response.status_code == 409
     assert subscribe_response.json()["detail"] == "code_in_use"
@@ -471,7 +471,7 @@ def test_a_dead_device_moves_back_with_update_push_id_and_keeps_its_date(client)
     response = client.post("/update-push-id", json={
         "old_push_id_hash": body["push_id_hash"],
         "new_push_id_hash": sha256_hex("push:bob-new"),
-        "new_push_token": "fresh-token",
+        "new_push_token": push_token_for("fresh"),
         "new_platform": "ios",
         "device_credential": body["device_credential"],
     })
@@ -480,7 +480,7 @@ def test_a_dead_device_moves_back_with_update_push_id_and_keeps_its_date(client)
     new = sha256_hex("push:bob-new")
     row = _sql(f"SELECT push_token, dead_since IS NULL, created_date = CURRENT_DATE - 100 "
                f"FROM token_subscriptions WHERE push_id_hash = '{new}'")
-    assert row == "fresh-token|t|t"  # token restored, mark cleared, original date kept
+    assert row == f"{push_token_for('fresh')}|t|t"  # token restored, mark cleared, original date kept
     assert _sql(f"SELECT COUNT(*) FROM token_subscriptions WHERE push_id_hash = '{bob}'") == "0"
 
 
@@ -493,7 +493,7 @@ def test_a_device_can_add_at_most_30_new_connections_per_day(client):
         json={
             "et_hash": sha256_hex("card:card-30"),
             "push_id_hash": sha256_hex("push:busy"),
-            "push_token": "push-token-busy",
+            "push_token": push_token_for("busy"),
             "platform": "ios",
             "device_credential": sha256_hex("secret:busy"),
         },

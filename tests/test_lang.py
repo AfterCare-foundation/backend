@@ -8,7 +8,7 @@ import httpx
 from app.config import settings
 from app.services import push
 from tests.test_club_flow import _sql as sql
-from tests.conftest import notify, sha256_hex, subscribe
+from tests.conftest import notify, push_token_for, sha256_hex, subscribe
 
 DE = "Du hast eine neue Nachricht. Öffne die App, um sie zu lesen."
 EN = "You have a new message. Open the app to read it."
@@ -46,7 +46,7 @@ def test_update_push_id_sets_the_language(client):
     response = client.post("/update-push-id", json={
         "old_push_id_hash": body["push_id_hash"],
         "new_push_id_hash": sha256_hex("push:bob2"),
-        "new_push_token": "new-token",
+        "new_push_token": push_token_for("new"),
         "new_platform": "ios",
         "device_credential": body["device_credential"],
         "lang": "de",
@@ -65,8 +65,8 @@ def test_notify_and_retry_use_the_recipients_language(client, sent):
     notify(client, device="alice", card="pink")
     notify(client, device="alice", card="green")
     assert {c["push_token"]: c["lang"] for c in sent} == {
-        "push-token-bob": "de",
-        "push-token-cara": "en",
+        push_token_for("bob"): "de",
+        push_token_for("cara"): "en",
     }
 
 
@@ -105,8 +105,8 @@ def test_apns_payload_has_title_and_the_right_text(monkeypatch, caplog):
 
     monkeypatch.setattr(push.httpx, "AsyncClient", Fake)
     with caplog.at_level(logging.DEBUG):  # nothing here may log the language
-        asyncio.run(push.send_push("tok", "ios", lang="de"))
-        asyncio.run(push.send_push("tok", "ios", lang="xx"))
+        asyncio.run(push.send_push(push_token_for("x"), "ios", lang="de"))
+        asyncio.run(push.send_push(push_token_for("x"), "ios", lang="xx"))
 
     assert seen[0]["aps"]["alert"] == {"title": "AfterCare", "body": DE}
     assert seen[1]["aps"]["alert"] == {"title": "AfterCare", "body": EN}

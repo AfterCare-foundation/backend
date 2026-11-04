@@ -125,11 +125,11 @@ def test_apns_failure_logs_apples_reason_word_only(monkeypatch, caplog):
 
     monkeypatch.setattr(push.httpx, "AsyncClient", Fake)
     with caplog.at_level(logging.ERROR):
-        result = asyncio.run(push.send_push("secret-device-token", "ios"))
+        result = asyncio.run(push.send_push("c0ffee" * 12, "ios"))
 
     assert result == push.PUSH_FAILED
     assert "status=403 reason=TopicDisallowed" in caplog.text
-    assert "secret-device-token" not in caplog.text
+    assert "c0ffee" not in caplog.text
 
 
 def test_http_client_logs_never_include_push_tokens(client, caplog):

@@ -1,7 +1,7 @@
 # Deleting all your data closes your codes, so the freed slot cannot be taken.
 
 from app.cron import cleanup_expired_subscriptions
-from tests.conftest import notify, sha256_hex, subscribe
+from tests.conftest import notify, push_token_for, sha256_hex, subscribe
 from tests.test_club_flow import _sql
 
 
@@ -16,7 +16,7 @@ def _try_subscribe(client, device: str, card: str):
     return client.post("/subscribe", json={
         "et_hash": sha256_hex(f"card:{card}"),
         "push_id_hash": sha256_hex(f"push:{device}"),
-        "push_token": f"push-token-{device}",
+        "push_token": push_token_for(device),
         "platform": "ios",
         "device_credential": sha256_hex(f"secret:{device}"),
     })

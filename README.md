@@ -181,7 +181,7 @@ All hashes are **64 lowercase hex characters** (SHA-256).
 
 Errors: a request that fails validation gets `422` with `{"detail": [{"loc": [...], "type": "...", "msg": "..."}]}`. The submitted values are never echoed back, and a message pydantic would build from the input reads `Invalid value`. An unexpected server error gets `500` with `{"detail": "internal_error"}`.
 
-`platform` on subscribe is `ios` or `android`. Optional `lang` (`en` default, or `de`) on `/subscribe` and `/update-push-id` sets the language of the wake-up push text (title "AfterCare"); any other value means English. Omitting it keeps the stored language.
+`platform` on subscribe is `ios` or `android`. `push_token` must match the platform's format: iOS is hex of even length, 64 to 200 characters; Android is letters, digits and `_ : . -`, 32 to 4096 characters. Anything else gets a 422 with a fixed message naming the field (`push_token`, or `new_push_token` on `/update-push-id`). Optional `lang` (`en` default, or `de`) on `/subscribe` and `/update-push-id` sets the language of the wake-up push text (title "AfterCare"); any other value means English. Omitting it keeps the stored language.
 
 ---
 
