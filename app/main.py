@@ -5,8 +5,8 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from app.config import settings
@@ -90,10 +90,75 @@ async def strip_forwarded_client(request: Request, call_next):
     return await call_next(request)
 
 
+_LOGGABLE_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+
+
+class CatchUnexpectedErrors:
+    """
+    Stop any unexpected exception inside the app. It is never re-raised, so
+    Starlette's ServerErrorMiddleware and uvicorn never log its message or
+    traceback (an asyncpg error message can hold a stored hash). The only log
+    line carries the method, the route template and the exception type name.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        started = False
+
+        async def tracking_send(message):
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except Exception as exc:
+            method = scope.get("method")
+            if method not in _LOGGABLE_METHODS:
+                method = "OTHER"
+            route = getattr(scope.get("route"), "path", None) or "unmatched"
+            logger.error("Unhandled %s on %s %s", type(exc).__name__, method, route)
+            # No route streams, and uvicorn's message for a cut-off response is fixed text.
+            if not started:
+                response = JSONResponse({"detail": "internal_error"}, status_code=500)
+                await response(scope, receive, send)
+
+
+app.add_middleware(CatchUnexpectedErrors)
+
+
+# ctx keys that come from the schema or are counts, never from the input.
+_SAFE_CTX_KEYS = {
+    "min_length", "max_length", "expected_length", "actual_length", "field_type",
+    "gt", "ge", "lt", "le",
+    "multiple_of", "pattern", "expected", "allowed_lengths", "ordered",
+}
+# Types whose msg is fixed text of ours or of FastAPI.
+_FIXED_MSG_TYPES = {"value_error", "json_invalid"}
+
+
+def _clean_error(err: dict) -> dict:
+    ctx = err.get("ctx") or {}
+    msg = err.get("msg", "")
+    if err.get("type") not in _FIXED_MSG_TYPES and not set(ctx) <= _SAFE_CTX_KEYS:
+        # e.g. uuid_parsing quotes a character of the input in its message.
+        msg = "Invalid value"
+    return {"loc": err.get("loc", []), "type": err.get("type", ""), "msg": msg}
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_handler(request: Request, exc: RequestValidationError):
-    # Default handler does not log the body. Keep it that way.
-    return await request_validation_exception_handler(request, exc)
+    # Never log the body, and never echo input, ctx or url back.
+    return JSONResponse(
+        {"detail": [_clean_error(e) for e in exc.errors()]}, status_code=422
+    )
 
 
 @app.get("/health")
