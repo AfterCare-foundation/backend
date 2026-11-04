@@ -138,8 +138,8 @@ async def run_dispatcher():
     while True:
         try:
             await dispatch_wakeups()
-        except Exception:
-            logger.exception("Error in dispatch_wakeups")
+        except Exception as exc:
+            logger.error("Job dispatch_wakeups failed: %s", type(exc).__name__)
         await asyncio.sleep(DISPATCH_INTERVAL_SECONDS)
 
 
@@ -147,6 +147,6 @@ async def run_cleanup():
     while True:
         try:
             await cleanup_expired_subscriptions()
-        except Exception:
-            logger.exception("Error in cleanup_expired_subscriptions")
+        except Exception as exc:
+            logger.error("Job cleanup_expired_subscriptions failed: %s", type(exc).__name__)
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
