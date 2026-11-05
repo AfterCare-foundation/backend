@@ -210,6 +210,37 @@ async def _send_fcm(push_token: str, lang: str) -> str:
     return PUSH_DEAD_TOKEN if response.status_code == 404 else PUSH_FAILED
 
 
+WAKE_CONCURRENCY = 10
+WAKE_TIMEOUT_SECONDS = 10.0
+
+
+async def wake_all(targets: list[tuple[str, str, str]], send) -> list[str]:
+    """
+    Run `send(token, platform, lang=...)` for every (token, platform, lang)
+    target, up to WAKE_CONCURRENCY at a time, each limited to
+    WAKE_TIMEOUT_SECONDS. Results come back in the order of `targets`. A push
+    that raises or times out counts as PUSH_FAILED. Network only: callers do
+    their database writes afterwards, one at a time, on their own connection.
+
+    The time limit starts once a push has a free slot, so a queued push is not
+    charged for waiting. It only bounds code that awaits: the blocking FCM
+    token refresh cannot be interrupted by it.
+    """
+    sem = asyncio.Semaphore(WAKE_CONCURRENCY)
+
+    async def one(token: str, platform: str, lang: str) -> str:
+        async with sem:
+            try:
+                return await asyncio.wait_for(
+                    send(token, platform, lang=lang), WAKE_TIMEOUT_SECONDS
+                )
+            except Exception as exc:
+                logger.error("Push failed: %s", type(exc).__name__)
+                return PUSH_FAILED
+
+    return list(await asyncio.gather(*(one(*t) for t in targets)))
+
+
 async def send_push(push_token: str, platform: str, lang: str = "en") -> str:
     """
     Send ONE wake-up push. Returns PUSH_OK, PUSH_FAILED or PUSH_DEAD_TOKEN.

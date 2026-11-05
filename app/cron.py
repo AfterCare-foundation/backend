@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import app.database as database
 from app.config import settings
 from app.services import stats
-from app.services.push import PUSH_DEAD_TOKEN, PUSH_OK, send_push
+from app.services.push import PUSH_DEAD_TOKEN, PUSH_OK, send_push, wake_all
 from app.services.tokens import mark_dead
 
 logger = logging.getLogger(__name__)
@@ -50,8 +50,11 @@ async def dispatch_wakeups():
                 return
 
             logger.info("Retrying %s wake-up push(es)", len(devices))
-            for d in devices:
-                result = await send_push(d["push_token"], d["platform"], lang=d["lang"])
+            results = await wake_all(
+                [(d["push_token"], d["platform"], d["lang"]) for d in devices],
+                send=send_push,
+            )
+            for d, result in zip(devices, results, strict=True):
                 await stats.bump(
                     conn,
                     stats.PUSHES_OK if result == PUSH_OK

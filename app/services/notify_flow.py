@@ -15,7 +15,7 @@ import asyncpg
 from app.config import settings
 from app.services import stats
 from app.services.devices import verify_device
-from app.services.push import PUSH_DEAD_TOKEN, PUSH_OK, send_push
+from app.services.push import PUSH_DEAD_TOKEN, PUSH_OK, send_push, wake_all
 from app.services.rate_limit import claim_campaign
 from app.services.tokens import mark_dead
 
@@ -114,12 +114,16 @@ async def run_deliveries(
     # Step 4: wake each device once. One broken contact must not stop the
     # others. A wake-up that fails stays marked `wake_pending` and the
     # 15-minute dispatcher retries it. The app never has to retry.
-    woken: dict[str, bool] = {}
-    for device, recipient in devices.items():
-        if recipient["dead_since"] is not None:
-            woken[device] = False  # the provider already refused this token
-            continue
-        result = await send_push(recipient["push_token"], recipient["platform"], lang=recipient["lang"])
+    # The pushes run in parallel (network only); the database writes follow one
+    # at a time, because one connection serves one coroutine at a time.
+    # A device whose token the provider already refused is not called.
+    woken = dict.fromkeys(devices, False)
+    to_wake = [(device, r) for device, r in devices.items() if r["dead_since"] is None]
+    results = await wake_all(
+        [(r["push_token"], r["platform"], r["lang"]) for _, r in to_wake],
+        send=send_push,
+    )
+    for (device, recipient), result in zip(to_wake, results, strict=True):
         await stats.bump(
             conn,
             stats.PUSHES_OK if result == PUSH_OK
