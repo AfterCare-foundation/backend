@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     # push settings below are enforced at startup.
     environment: Literal["development", "production"]
 
-    # When several app processes share one database, advisory locks still
-    # prevent double-send. Set false on extra web workers if you add a
+    # When several app processes share one database, advisory locks make sure
+    # only one process runs each job at a time. Set false on extra web workers if you add a
     # dedicated clock process later.
     run_background_jobs: bool = True
 

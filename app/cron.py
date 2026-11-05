@@ -1,7 +1,9 @@
 # app/cron.py
 #
-# Background jobs. PostgreSQL advisory locks mean two app processes
-# cannot dispatch the same pending row twice.
+# Background jobs. Each job runs inside one transaction that first takes a
+# PostgreSQL transaction-level advisory lock, so at most one app process runs
+# each job at a time. The lock ends with the transaction, even on an error, so
+# it can never stay behind on a pooled connection.
 
 import asyncio
 import logging
@@ -29,10 +31,13 @@ async def dispatch_wakeups():
     (today and yesterday), and never calls a token the provider called dead.
     """
     async with database.pool.acquire() as conn:
-        locked = await conn.fetchval("SELECT pg_try_advisory_lock($1)", LOCK_DISPATCH)
-        if not locked:
-            return
-        try:
+        # The transaction stays open while the pushes run. That is accepted:
+        # each push is limited to WAKE_TIMEOUT_SECONDS, so the wait is at most
+        # about ceil(devices / WAKE_CONCURRENCY) * 10 s.
+        async with conn.transaction():
+            locked = await conn.fetchval("SELECT pg_try_advisory_xact_lock($1)", LOCK_DISPATCH)
+            if not locked:
+                return
             devices = await conn.fetch(
                 """
                 SELECT DISTINCT ON (m.push_id_hash)
@@ -68,16 +73,14 @@ async def dispatch_wakeups():
                         "UPDATE mailbox SET wake_pending = FALSE WHERE push_id_hash = $1",
                         d["push_id_hash"],
                     )
-        finally:
-            await conn.execute("SELECT pg_advisory_unlock($1)", LOCK_DISPATCH)
 
 
 async def cleanup_expired_subscriptions():
     async with database.pool.acquire() as conn:
-        locked = await conn.fetchval("SELECT pg_try_advisory_lock($1)", LOCK_CLEANUP)
-        if not locked:
-            return
-        try:
+        async with conn.transaction():
+            locked = await conn.fetchval("SELECT pg_try_advisory_xact_lock($1)", LOCK_CLEANUP)
+            if not locked:
+                return
             cutoff = datetime.now(timezone.utc).date() - timedelta(days=settings.subscription_ttl_days)
             result = await conn.execute(
                 "DELETE FROM token_subscriptions WHERE created_date < $1",
@@ -133,8 +136,6 @@ async def cleanup_expired_subscriptions():
 
             # Today's totals, taken after the cleanup.
             await stats.record_snapshot(conn)
-        finally:
-            await conn.execute("SELECT pg_advisory_unlock($1)", LOCK_CLEANUP)
 
 
 async def run_dispatcher():
