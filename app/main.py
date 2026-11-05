@@ -10,10 +10,12 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from app.body_limit import LimitRequestBody
+import app.database as database
 from app.config import settings
 from app.database import init_db, close_db
 from app.routes import subscribe, notify, push_id, inbox
 from app import cron
+from app.services import push
 
 # Status and our own messages only. No request bodies, no client IPs.
 logging.basicConfig(
@@ -44,10 +46,12 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    if dispatcher_task:
-        dispatcher_task.cancel()
-    if cleanup_task:
-        cleanup_task.cancel()
+    tasks = [t for t in (dispatcher_task, cleanup_task) if t]
+    for task in tasks:
+        task.cancel()
+    # Let the jobs stop before the client and the pool they use are closed.
+    await asyncio.gather(*tasks, return_exceptions=True)
+    await push.close_apns_client()
     await close_db()
     logger.info("AfterCare backend stopped")
 
@@ -87,8 +91,8 @@ app.include_router(inbox.router)
 async def strip_forwarded_client(request: Request, call_next):
     """
     Ignore client identity headers so application code cannot accidentally
-    treat a forwarded IP as a user identifier. Real stripping still belongs
-    on the load balancer (see comment in Procfile).
+    treat a forwarded IP as a user identifier. This does not change what the
+    host's own router logs; that is a hosting setting to check (see Procfile).
     """
     headers = request.scope.get("headers")
     if headers is not None:
@@ -174,6 +178,17 @@ async def validation_handler(request: Request, exc: RequestValidationError):
     )
 
 
+HEALTH_TIMEOUT_SECONDS = 2.0
+
+
 @app.get("/health")
 async def health():
+    try:
+        # The timeout also covers waiting for a free connection from the pool.
+        async with asyncio.timeout(HEALTH_TIMEOUT_SECONDS):
+            async with database.pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+    except Exception as exc:
+        logger.error("Health check failed: %s", type(exc).__name__)
+        return JSONResponse({"status": "unavailable"}, status_code=503)
     return {"status": "ok"}

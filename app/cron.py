@@ -1,7 +1,9 @@
 # app/cron.py
 #
-# Background jobs. PostgreSQL advisory locks mean two app processes
-# cannot dispatch the same pending row twice.
+# Background jobs. Each job runs inside one transaction that first takes a
+# PostgreSQL transaction-level advisory lock, so at most one app process runs
+# each job at a time. The lock ends with the transaction, even on an error, so
+# it can never stay behind on a pooled connection.
 
 import asyncio
 import logging
@@ -10,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import app.database as database
 from app.config import settings
 from app.services import stats
-from app.services.push import PUSH_DEAD_TOKEN, PUSH_OK, send_push
+from app.services.push import PUSH_DEAD_TOKEN, PUSH_OK, send_push, wake_all
 from app.services.tokens import mark_dead
 
 logger = logging.getLogger(__name__)
@@ -29,10 +31,13 @@ async def dispatch_wakeups():
     (today and yesterday), and never calls a token the provider called dead.
     """
     async with database.pool.acquire() as conn:
-        locked = await conn.fetchval("SELECT pg_try_advisory_lock($1)", LOCK_DISPATCH)
-        if not locked:
-            return
-        try:
+        # The transaction stays open while the pushes run. That is accepted:
+        # each push is limited to WAKE_TIMEOUT_SECONDS, so the wait is at most
+        # about ceil(devices / WAKE_CONCURRENCY) * 10 s.
+        async with conn.transaction():
+            locked = await conn.fetchval("SELECT pg_try_advisory_xact_lock($1)", LOCK_DISPATCH)
+            if not locked:
+                return
             devices = await conn.fetch(
                 """
                 SELECT DISTINCT ON (m.push_id_hash)
@@ -50,8 +55,11 @@ async def dispatch_wakeups():
                 return
 
             logger.info("Retrying %s wake-up push(es)", len(devices))
-            for d in devices:
-                result = await send_push(d["push_token"], d["platform"], lang=d["lang"])
+            results = await wake_all(
+                [(d["push_token"], d["platform"], d["lang"]) for d in devices],
+                send=send_push,
+            )
+            for d, result in zip(devices, results, strict=True):
                 await stats.bump(
                     conn,
                     stats.PUSHES_OK if result == PUSH_OK
@@ -65,16 +73,14 @@ async def dispatch_wakeups():
                         "UPDATE mailbox SET wake_pending = FALSE WHERE push_id_hash = $1",
                         d["push_id_hash"],
                     )
-        finally:
-            await conn.execute("SELECT pg_advisory_unlock($1)", LOCK_DISPATCH)
 
 
 async def cleanup_expired_subscriptions():
     async with database.pool.acquire() as conn:
-        locked = await conn.fetchval("SELECT pg_try_advisory_lock($1)", LOCK_CLEANUP)
-        if not locked:
-            return
-        try:
+        async with conn.transaction():
+            locked = await conn.fetchval("SELECT pg_try_advisory_xact_lock($1)", LOCK_CLEANUP)
+            if not locked:
+                return
             cutoff = datetime.now(timezone.utc).date() - timedelta(days=settings.subscription_ttl_days)
             result = await conn.execute(
                 "DELETE FROM token_subscriptions WHERE created_date < $1",
@@ -130,8 +136,6 @@ async def cleanup_expired_subscriptions():
 
             # Today's totals, taken after the cleanup.
             await stats.record_snapshot(conn)
-        finally:
-            await conn.execute("SELECT pg_advisory_unlock($1)", LOCK_CLEANUP)
 
 
 async def run_dispatcher():

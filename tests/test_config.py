@@ -162,3 +162,18 @@ def test_otel_environment_variables_wire_up_no_exporter(environment, monkeypatch
     # logs a warning, so the warning is the sign that it tried at all.
     assert not [r for r in caplog.records if "telemetry" in r.getMessage().lower()]
     assert isinstance(trace.get_tracer_provider(), trace.ProxyTracerProvider)
+
+
+def test_env_example_has_exactly_the_settings_keys():
+    import re
+    from pathlib import Path
+
+    from app.config import Settings
+
+    text = (Path(__file__).resolve().parents[1] / ".env.example").read_text(encoding="utf-8")
+    keys = {
+        m.group(1)
+        for line in text.splitlines()
+        if not line.lstrip().startswith("#") and (m := re.match(r"([A-Z][A-Z0-9_]*)=", line))
+    }
+    assert keys == {name.upper() for name in Settings.model_fields}

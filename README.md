@@ -80,6 +80,8 @@ for f in migrations/*.sql; do psql -h localhost -U aftercare_dev -d aftercare_te
 uv sync            # creates .venv with the exact versions in uv.lock
 cp .env.example .env
 # Edit DATABASE_URL if needed. Leave PUSH_STUB_MODE=true until you have APNs/FCM keys.
+# An older .env must no longer contain FRIENDLY_CAPTCHA_SECRET or CAPTCHA_SKIP:
+# delete both lines, or startup fails (unknown settings in .env are rejected).
 
 uv run uvicorn app.main:app --reload --no-access-log
 ```
@@ -140,7 +142,7 @@ Order matters when a migration and the code depend on each other. Migration 004 
 
 Production must use **HTTPS**. The device credential is sent on each mutating request; it is a bearer secret.
 
-On the load balancer, disable access logs and strip client IPs (see comments in `Procfile`).
+Client IPs: the app ignores `X-Forwarded-For`, `X-Real-IP` and `Forwarded` (`strip_forwarded_client` in `app/main.py`), and uvicorn runs with `--no-access-log`. Scalingo's own router terminates the connections and sees client IPs. What it logs and how long it keeps that is a Scalingo setting and a data-processing-agreement question for the founders. It must be checked; this repo does not control it.
 
 ---
 
@@ -151,7 +153,7 @@ All hashes are **64 lowercase hex characters** (SHA-256).
 
 | Method   | Path              | Purpose                                                                                                                                                                                                                           |
 | -------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`    | `/health`         | Liveness                                                                                                                                                                                                                          |
+| `GET`    | `/health`         | Liveness and database: `200 {"status":"ok"}`, or `503 {"status":"unavailable"}` when the database does not answer within 2 s                                                                                                                                                                                                                          |
 | `POST`   | `/subscribe`      | Register this device on a scanned card. A code holds at most 2 devices; a third gets `409 code_in_use`. A device can add at most 30 new codes per UTC day, then `429`                                                             |
 | `DELETE` | `/subscribe`      | Erase this device (GDPR). Its codes are also closed for good (`burned_codes`, card hash only), so nobody new can take the freed slot; the other phone can still re-scan. Closed codes are forgotten after `SUBSCRIPTION_TTL_DAYS` |
 | `POST`   | `/notify`         | Store notifications in the contacts' mailboxes and wake their phones, immediately                                                                                                                                                 |
@@ -196,8 +198,6 @@ migrations/                SQL, applied in order (001 schema, 002 drops campaign
 docs/CRYPTO.md           What the app must do so both sides agree (hashing, encryption)
 pyproject.toml, uv.lock  Dependencies (ranges) and the exact pinned versions
 ```
-
-`app/services/captcha.py` is unused. It is reserved for later, risk-based checks only.
 
 ---
 
