@@ -27,9 +27,6 @@ class Settings(BaseSettings):
     # dedicated clock process later.
     run_background_jobs: bool = True
 
-    friendly_captcha_secret: str = ""
-    captcha_skip: bool = False
-
     apns_key_id: str = ""
     apns_key_file: str = "secrets/apns_key.p8"
     # Alternative to the file: the .p8 text itself (for hosts without secret files).

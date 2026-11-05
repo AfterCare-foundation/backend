@@ -91,8 +91,8 @@ app.include_router(inbox.router)
 async def strip_forwarded_client(request: Request, call_next):
     """
     Ignore client identity headers so application code cannot accidentally
-    treat a forwarded IP as a user identifier. Real stripping still belongs
-    on the load balancer (see comment in Procfile).
+    treat a forwarded IP as a user identifier. This does not change what the
+    host's own router logs; that is a hosting setting to check (see Procfile).
     """
     headers = request.scope.get("headers")
     if headers is not None:
