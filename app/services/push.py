@@ -10,6 +10,7 @@
 # fetches its messages from the server over its own TLS connection (/inbox).
 # Apple and Google therefore never see the encrypted payloads.
 
+import asyncio
 import json
 import logging
 import time
@@ -66,27 +67,86 @@ def _make_apns_jwt() -> str:
     )
 
 
+# Apple wants one long-lived connection and a provider token refreshed no more
+# than every 20 minutes (valid up to 60). One client and one token are shared.
+APNS_JWT_MAX_AGE_SECONDS = 50 * 60
+_EXPIRED_TOKEN_REASONS = ("ExpiredProviderToken", "InvalidProviderToken")
+
+_apns_client = None
+_apns_client_loop = None
+_apns_jwt: str | None = None
+_apns_jwt_at = 0.0
+
+
+def _get_apns_client():
+    """
+    The shared client. It belongs to the event loop it was created on; a
+    different (or closed) loop gets a new one, since tests and asyncio.run()
+    each use a fresh loop.
+    """
+    global _apns_client, _apns_client_loop
+    loop = asyncio.get_running_loop()
+    if (
+        _apns_client is None
+        or _apns_client_loop is not loop
+        or _apns_client_loop.is_closed()
+    ):
+        _apns_client = httpx.AsyncClient(http2=True, timeout=10.0)
+        _apns_client_loop = loop
+    return _apns_client
+
+
+def _apns_auth_token() -> str:
+    """
+    The cached provider token, signed anew after 50 minutes. There is no await
+    in here, so parallel sends cannot interleave between the age check and the
+    cache write: at most one signs per refresh (and no asyncio.Lock, which
+    would bind to a single loop).
+    """
+    global _apns_jwt, _apns_jwt_at
+    now = time.monotonic()
+    if _apns_jwt is None or now - _apns_jwt_at >= APNS_JWT_MAX_AGE_SECONDS:
+        _apns_jwt = _make_apns_jwt()
+        _apns_jwt_at = now
+    return _apns_jwt
+
+
+async def close_apns_client() -> None:
+    """Close the shared client and forget the cached token. Never raises."""
+    global _apns_client, _apns_client_loop, _apns_jwt, _apns_jwt_at
+    client, loop = _apns_client, _apns_client_loop
+    _apns_client = _apns_client_loop = _apns_jwt = None
+    _apns_jwt_at = 0.0
+    if client is None:
+        return
+    try:
+        # A client of another (dead) loop cannot be closed from here: drop it.
+        if loop is asyncio.get_running_loop():
+            await client.aclose()
+    except Exception as exc:
+        logger.error("Closing the APNs client failed: %s", type(exc).__name__)
+
+
 async def _send_apns(push_token: str, lang: str) -> str:
-    auth_token = _make_apns_jwt()
+    auth_token = _apns_auth_token()
     url = f"{_apns_host()}/3/device/{push_token}"
 
-    async with httpx.AsyncClient(http2=True) as client:
-        response = await client.post(
-            url,
-            json={
-                "aps": {
-                    "alert": {"title": PUSH_TITLE, "body": alert_body(lang)},
-                    "sound": "default",
-                },
+    response = await _get_apns_client().post(
+        url,
+        json={
+            "aps": {
+                "alert": {"title": PUSH_TITLE, "body": alert_body(lang)},
+                "sound": "default",
             },
-            headers={
-                "authorization": f"bearer {auth_token}",
-                "apns-topic": settings.apns_bundle_id,
-                "apns-push-type": "alert",
-                "apns-priority": "10",
-            },
-            timeout=10.0,
-        )
+        },
+        headers={
+            "authorization": f"bearer {auth_token}",
+            "apns-topic": settings.apns_bundle_id,
+            "apns-push-type": "alert",
+            "apns-priority": "10",
+        },
+        timeout=10.0,
+    )
 
     if response.status_code == 200:
         return PUSH_OK
@@ -100,6 +160,13 @@ async def _send_apns(push_token: str, lang: str) -> str:
     # wrong. Anything else is not logged, so a surprise can never leak data.
     logged = reason if isinstance(reason, str) and reason.isalpha() and len(reason) <= 40 else "-"
     logger.error("APNs push failed: status=%s reason=%s", response.status_code, logged)
+    if response.status_code == 403 and reason in _EXPIRED_TOKEN_REASONS:
+        # Sign a fresh token on the next push; this one is retried by the
+        # dispatcher. Only drop the cache if no parallel send already replaced it.
+        global _apns_jwt
+        if _apns_jwt == auth_token:
+            _apns_jwt = None
+        return PUSH_FAILED
     if response.status_code == 410 or reason in ("Unregistered", "BadDeviceToken"):
         return PUSH_DEAD_TOKEN
     return PUSH_FAILED

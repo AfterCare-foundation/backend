@@ -14,6 +14,7 @@ from app.config import settings
 from app.database import init_db, close_db
 from app.routes import subscribe, notify, push_id, inbox
 from app import cron
+from app.services import push
 
 # Status and our own messages only. No request bodies, no client IPs.
 logging.basicConfig(
@@ -44,10 +45,12 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    if dispatcher_task:
-        dispatcher_task.cancel()
-    if cleanup_task:
-        cleanup_task.cancel()
+    tasks = [t for t in (dispatcher_task, cleanup_task) if t]
+    for task in tasks:
+        task.cancel()
+    # Let the jobs stop before the client and the pool they use are closed.
+    await asyncio.gather(*tasks, return_exceptions=True)
+    await push.close_apns_client()
     await close_db()
     logger.info("AfterCare backend stopped")
 
